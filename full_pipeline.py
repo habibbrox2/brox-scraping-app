@@ -174,7 +174,11 @@ async def run_pipeline(api_url: str = None, api_token: str = None, ai_key: str =
     # Get sources
     conn = sqlite3.connect(DB_PATH)
     conn.row_factory = sqlite3.Row
-    cursor = conn.execute("SELECT * FROM web_scraping_sources WHERE enabled = 1")
+    cols = [row[1] for row in conn.execute("PRAGMA table_info(web_scraping_sources)").fetchall()]
+    if "enabled" in cols:
+        cursor = conn.execute("SELECT * FROM web_scraping_sources WHERE enabled = 1")
+    else:
+        cursor = conn.execute("SELECT * FROM web_scraping_sources WHERE is_active = 1")
     sources = [dict(row) for row in cursor.fetchall()]
     conn.close()
     

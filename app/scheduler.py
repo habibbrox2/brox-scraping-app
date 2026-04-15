@@ -4,12 +4,14 @@ Job Scheduler for periodic scraping runs
 
 import asyncio
 from typing import Optional
+from datetime import datetime, timedelta
 from apscheduler.schedulers.background import BackgroundScheduler
 from apscheduler.triggers.cron import CronTrigger
 from apscheduler.triggers.interval import IntervalTrigger
 from apscheduler.jobstores.base import JobLookupError
 
 from app.database import db
+from app.database.models import JobStatus
 from app.scraper.scraper_engine import scraper_engine
 from app.utils.logger import get_logger
 
@@ -61,6 +63,12 @@ class JobScheduler:
             args=[job_id],
             name=f"Scheduled job: {job_id}"
         )
+        job = db.get_job(job_id)
+        if job:
+            job.status = JobStatus.SCHEDULED
+            if interval_minutes:
+                job.next_run_at = datetime.now() + timedelta(minutes=interval_minutes)
+            db.update_job(job)
         logger.info(f"Scheduled job {job_id} with trigger: {trigger}")
     
     def unschedule_job(self, job_id: str):
@@ -70,6 +78,13 @@ class JobScheduler:
             logger.info(f"Unscheduled job {job_id}")
         except JobLookupError:
             logger.warning(f"Job {job_id} was not scheduled")
+        finally:
+            job = db.get_job(job_id)
+            if job:
+                if job.status == JobStatus.SCHEDULED:
+                    job.status = JobStatus.DRAFT
+                job.next_run_at = None
+                db.update_job(job)
     
     def _run_scheduled_job(self, job_id: str):
         """Run a scheduled job"""

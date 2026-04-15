@@ -36,10 +36,81 @@ engine = create_engine(
     connect_args={"check_same_thread": False}  # Allow multi-thread access
 )
 
+
+def _parse_iso_datetime(value, default: Optional[datetime] = None) -> datetime:
+    """Parse datetime values from modern/legacy DB rows safely."""
+    if value in (None, ""):
+        return default or datetime.now()
+    if isinstance(value, datetime):
+        return value
+    try:
+        return datetime.fromisoformat(str(value))
+    except Exception:
+        return default or datetime.now()
+
 def get_connection():
     """Get database connection"""
     DB_DIR.mkdir(parents=True, exist_ok=True)
     return engine.connect()
+
+def _table_columns(conn, table_name: str) -> List[str]:
+    """Return the list of column names for a table."""
+    cursor = conn.execute(text(f"PRAGMA table_info({table_name})"))
+    return [row[1] for row in cursor.fetchall()]
+
+def _source_schema_mode(conn) -> str:
+    """Detect whether the source table uses the current or legacy layout."""
+    columns = set(_table_columns(conn, "web_scraping_sources"))
+    if {"config", "enabled", "updated_at"}.issubset(columns):
+        return "current"
+    return "legacy"
+
+def _build_default_source_config(source_url: str) -> JobConfig:
+    """Build a generic source config that can extract useful article-like data."""
+    return JobConfig(
+        url=source_url,
+        fields=[
+            FieldConfig(name="title", selector="h1", selector_type="css", attribute="text"),
+            FieldConfig(name="summary", selector="p", selector_type="css", attribute="text"),
+            FieldConfig(name="link", selector="a[href]", selector_type="css", attribute="href"),
+        ],
+        root_selector="article, main, body",
+    )
+
+def _coerce_source_config(raw_config_value, fallback_url: str, use_default_fields: bool = True) -> JobConfig:
+    """Normalize a source config from JSON/dict/legacy values."""
+    if raw_config_value in (None, ""):
+        return _build_default_source_config(fallback_url) if use_default_fields else JobConfig(url=fallback_url, fields=[])
+
+    try:
+        if isinstance(raw_config_value, str):
+            config_dict = json.loads(raw_config_value)
+        elif isinstance(raw_config_value, dict):
+            config_dict = dict(raw_config_value)
+        else:
+            config_dict = json.loads(str(raw_config_value))
+    except Exception:
+        config_dict = {}
+
+    if not isinstance(config_dict, dict):
+        config_dict = {}
+
+    if not config_dict.get("url") or not str(config_dict["url"]).strip():
+        config_dict["url"] = fallback_url
+
+    fields = config_dict.get("fields")
+    if not fields:
+        return _build_default_source_config(fallback_url) if use_default_fields else JobConfig(url=fallback_url, fields=[])
+
+    try:
+        config = JobConfig.model_validate(config_dict)
+    except Exception:
+        return _build_default_source_config(fallback_url) if use_default_fields else JobConfig(url=fallback_url, fields=[])
+
+    if use_default_fields and not config.fields:
+        return _build_default_source_config(fallback_url)
+
+    return config
 
 @contextmanager
 def get_session():
@@ -225,32 +296,27 @@ def delete_job(job_id: str) -> bool:
 
 def _row_to_job(row) -> Job:
     """Convert database row to Job model"""
+    config = _coerce_source_config(row[4], "http://example.com", use_default_fields=False)
+
     try:
-        config = JobConfig.model_validate_json(row[4])
-    except Exception as e:
-        logger.error(f"Invalid job config for job {row[0]}: {e}")
-        # Try to fix the config
-        try:
-            config_dict = json.loads(row[4])
-            if 'url' in config_dict and (not config_dict['url'] or not config_dict['url'].strip()):
-                config_dict['url'] = "http://example.com"
-            config = JobConfig.model_validate(config_dict)
-        except Exception:
-            config = JobConfig(url="http://example.com", fields=[])
+        status = JobStatus(row[5]) if row[5] else JobStatus.DRAFT
+    except Exception:
+        status = JobStatus.DRAFT
+
     return Job(
         id=row[0],
         name=row[1],
         description=row[2],
         template=row[3],
         config=config,
-        status=JobStatus(row[5]),
-        created_at=datetime.fromisoformat(row[6]),
-        updated_at=datetime.fromisoformat(row[7]),
-        last_run_at=datetime.fromisoformat(row[8]) if row[8] else None,
-        next_run_at=datetime.fromisoformat(row[9]) if row[9] else None,
-        run_count=row[10],
-        success_count=row[11],
-        failure_count=row[12]
+        status=status,
+        created_at=_parse_iso_datetime(row[6]),
+        updated_at=_parse_iso_datetime(row[7]),
+        last_run_at=_parse_iso_datetime(row[8], None) if row[8] else None,
+        next_run_at=_parse_iso_datetime(row[9], None) if row[9] else None,
+        run_count=row[10] if row[10] is not None else 0,
+        success_count=row[11] if row[11] is not None else 0,
+        failure_count=row[12] if row[12] is not None else 0
     )
 
 # Item operations
@@ -297,14 +363,31 @@ def delete_items_by_job(job_id: str) -> int:
         cursor = conn.execute(text("DELETE FROM items WHERE job_id = :job_id"), {"job_id": job_id})
     return cursor.rowcount
 
+def delete_item(item_id: str) -> bool:
+    """Delete a single scraped item."""
+    with get_session() as conn:
+        cursor = conn.execute(text("DELETE FROM items WHERE id = :item_id"), {"item_id": item_id})
+    return cursor.rowcount > 0
+
 def _row_to_item(row) -> ScrapedItem:
     """Convert database row to ScrapedItem model"""
+    raw_data = row[2]
+    if isinstance(raw_data, str):
+        try:
+            parsed_data = json.loads(raw_data)
+        except Exception:
+            parsed_data = {"raw": raw_data}
+    elif isinstance(raw_data, dict):
+        parsed_data = raw_data
+    else:
+        parsed_data = {"raw": str(raw_data)}
+
     return ScrapedItem(
         id=row[0],
         job_id=row[1],
-        data=json.loads(row[2]),
+        data=parsed_data,
         url=row[3],
-        created_at=datetime.fromisoformat(row[4]),
+        created_at=_parse_iso_datetime(row[4]),
         status=row[5]
     )
 
@@ -340,8 +423,8 @@ def _row_to_result(row) -> JobResult:
         items_count=row[2],
         success_count=row[3],
         failure_count=row[4],
-        started_at=datetime.fromisoformat(row[5]),
-        completed_at=datetime.fromisoformat(row[6]) if row[6] else None,
+        started_at=_parse_iso_datetime(row[5]),
+        completed_at=_parse_iso_datetime(row[6], None) if row[6] else None,
         error_message=row[7]
     )
 
@@ -423,41 +506,60 @@ def delete_template(template_id: str) -> bool:
 
 def _row_to_template(row) -> Template:
     """Convert database row to Template model"""
-    try:
-        config = JobConfig.model_validate_json(row[4])
-    except Exception as e:
-        logger.error(f"Invalid template config for template {row[0]}: {e}")
-        # Try to fix the config
-        try:
-            config_dict = json.loads(row[4])
-            if 'url' in config_dict and (not config_dict['url'] or not config_dict['url'].strip()):
-                config_dict['url'] = "http://example.com"
-            config = JobConfig.model_validate(config_dict)
-        except Exception:
-            config = JobConfig(url="http://example.com", fields=[])
+    config = _coerce_source_config(row[4], "http://example.com", use_default_fields=True)
+
+    created_at_value = row[6] if len(row) > 6 else None
+    if created_at_value in (None, ""):
+        created_at_value = datetime.now().isoformat()
+    elif isinstance(created_at_value, datetime):
+        created_at_value = created_at_value.isoformat()
+
+    category_value = row[3] if len(row) > 3 else "general"
+    if category_value in (None, ""):
+        category_value = "general"
+
     return Template(
         id=row[0],
         name=row[1],
         description=row[2],
-        category=row[3],
+        category=str(category_value),
         config=config,
         icon=row[5],
-        created_at=datetime.fromisoformat(row[6])
+        created_at=_parse_iso_datetime(created_at_value)
     )
 
 # Web Scraping Sources
 def create_source(source: WebScrapingSource):
     """Create a new web scraping source"""
+    source.config = _coerce_source_config(source.config.model_dump(), source.url, use_default_fields=True)
     with get_session() as conn:
-        conn.execute(text("""
-            INSERT INTO web_scraping_sources (id, name, url, description, category, config, enabled, created_at, updated_at)
-            VALUES (:id, :name, :url, :description, :category, :config, :enabled, :created_at, :updated_at)
-        """), {
-            "id": source.id, "name": source.name, "url": source.url, "description": source.description, 
-            "category": source.category, "config": source.config.model_dump_json(), 
-            "enabled": source.enabled, "created_at": source.created_at.isoformat(), 
-            "updated_at": source.updated_at.isoformat()
-        })
+        if _source_schema_mode(conn) == "current":
+            conn.execute(text("""
+                INSERT INTO web_scraping_sources (id, name, url, description, category, config, enabled, created_at, updated_at)
+                VALUES (:id, :name, :url, :description, :category, :config, :enabled, :created_at, :updated_at)
+            """), {
+                "id": source.id, "name": source.name, "url": source.url, "description": source.description,
+                "category": source.category, "config": source.config.model_dump_json(),
+                "enabled": source.enabled, "created_at": source.created_at.isoformat(),
+                "updated_at": source.updated_at.isoformat()
+            })
+        else:
+            conn.execute(text("""
+                INSERT INTO web_scraping_sources (
+                    id, name, url, type, category_id, selectors, advance_config, presets,
+                    fetch_interval, is_active, last_fetched_at, created_at, content_type,
+                    scrape_depth, use_browser, max_pages, delay, pagination_type,
+                    pagination_selector, pagination_pattern, proxy_enabled, proxy_provider,
+                    proxy_config, ssl_verify, timeout, connect_timeout
+                )
+                VALUES (
+                    :id, :name, :url, :type, :category_id, :selectors, :advance_config, :presets,
+                    :fetch_interval, :is_active, :last_fetched_at, :created_at, :content_type,
+                    :scrape_depth, :use_browser, :max_pages, :delay, :pagination_type,
+                    :pagination_selector, :pagination_pattern, :proxy_enabled, :proxy_provider,
+                    :proxy_config, :ssl_verify, :timeout, :connect_timeout
+                )
+            """), _source_to_legacy_params(source))
 
 def get_source(source_id: str) -> Optional[WebScrapingSource]:
     """Get a source by ID"""
@@ -472,21 +574,44 @@ def get_all_sources() -> List[WebScrapingSource]:
     """Get all sources"""
     with get_session() as conn:
         cursor = conn.execute(text("SELECT * FROM web_scraping_sources ORDER BY name"))
-        return [_row_to_source(row) for row in cursor.fetchall()]
+        sources = []
+        for row in cursor.fetchall():
+            try:
+                sources.append(_row_to_source(row))
+            except Exception as e:
+                logger.debug(f"Skipping invalid source row: {e}")
+        return sources
 
 def update_source(source: WebScrapingSource):
     """Update a source"""
+    source.config = _coerce_source_config(source.config.model_dump(), source.url, use_default_fields=True)
     with get_session() as conn:
-        conn.execute(text("""
-            UPDATE web_scraping_sources 
-            SET name = :name, url = :url, description = :description, category = :category, 
-                config = :config, enabled = :enabled, updated_at = :updated_at
-            WHERE id = :id
-        """), {
-            "name": source.name, "url": source.url, "description": source.description, 
-            "category": source.category, "config": source.config.model_dump_json(), 
-            "enabled": source.enabled, "updated_at": source.updated_at.isoformat(), "id": source.id
-        })
+        if _source_schema_mode(conn) == "current":
+            conn.execute(text("""
+                UPDATE web_scraping_sources
+                SET name = :name, url = :url, description = :description, category = :category,
+                    config = :config, enabled = :enabled, updated_at = :updated_at
+                WHERE id = :id
+            """), {
+                "name": source.name, "url": source.url, "description": source.description,
+                "category": source.category, "config": source.config.model_dump_json(),
+                "enabled": source.enabled, "updated_at": source.updated_at.isoformat(), "id": source.id
+            })
+        else:
+            conn.execute(text("""
+                UPDATE web_scraping_sources
+                SET name = :name, url = :url, type = :type, category_id = :category_id,
+                    selectors = :selectors, advance_config = :advance_config, presets = :presets,
+                    fetch_interval = :fetch_interval, is_active = :is_active,
+                    last_fetched_at = :last_fetched_at, created_at = :created_at,
+                    content_type = :content_type, scrape_depth = :scrape_depth,
+                    use_browser = :use_browser, max_pages = :max_pages, delay = :delay,
+                    pagination_type = :pagination_type, pagination_selector = :pagination_selector,
+                    pagination_pattern = :pagination_pattern, proxy_enabled = :proxy_enabled,
+                    proxy_provider = :proxy_provider, proxy_config = :proxy_config,
+                    ssl_verify = :ssl_verify, timeout = :timeout, connect_timeout = :connect_timeout
+                WHERE id = :id
+            """), _source_to_legacy_params(source))
 
 def delete_source(source_id: str) -> bool:
     """Delete a source"""
@@ -496,29 +621,80 @@ def delete_source(source_id: str) -> bool:
 
 def _row_to_source(row) -> WebScrapingSource:
     """Convert database row to WebScrapingSource model"""
-    try:
-        config = JobConfig.model_validate_json(row[5])
-    except Exception as e:
-        logger.error(f"Invalid source config for source {row[0]}: {e}")
-        # Try to fix the config
-        try:
-            config_dict = json.loads(row[5])
-            if 'url' in config_dict and (not config_dict['url'] or not config_dict['url'].strip()):
-                config_dict['url'] = "http://example.com"
-            config = JobConfig.model_validate(config_dict)
-        except Exception:
-            config = JobConfig(url="http://example.com", fields=[])
+    mapping = getattr(row, "_mapping", {})
+
+    def _value(keys, index=None, default=None):
+        if isinstance(keys, str):
+            keys = (keys,)
+
+        for key in keys:
+            if key in mapping and mapping[key] is not None:
+                return mapping[key]
+
+        if index is not None:
+            try:
+                value = row[index]
+                if value is not None:
+                    return value
+            except Exception:
+                pass
+
+        return default
+
+    raw_config = _value(("config", "advance_config", "selectors", "proxy_config"), 5, None)
+    enabled_value = _value(("enabled", "is_active"), 6, True)
+    created_at_value = _value(("created_at",), 7, datetime.now().isoformat())
+    updated_at_value = _value(("updated_at", "last_fetched_at", "created_at"), 8, created_at_value)
+    source_url = str(_value(("url",), 2, "http://example.com") or "http://example.com")
+    category_value = _value(("category", "category_id"), 4, "general")
+    if category_value in (None, ""):
+        category_value = "general"
+    category_value = str(category_value)
+
+    config = _coerce_source_config(raw_config, source_url, use_default_fields=True)
+
     return WebScrapingSource(
-        id=row[0],
-        name=row[1],
-        url=row[2],
-        description=row[3],
-        category=row[4],
+        id=str(_value(("id",), 0)),
+        name=_value(("name",), 1, ""),
+        url=source_url,
+        description=_value(("description",), 3, None),
+        category=category_value,
         config=config,
-        enabled=row[6],
-        created_at=datetime.fromisoformat(row[7]),
-        updated_at=datetime.fromisoformat(row[8])
+        enabled=bool(enabled_value),
+        created_at=_parse_iso_datetime(created_at_value),
+        updated_at=_parse_iso_datetime(updated_at_value, _parse_iso_datetime(created_at_value))
     )
+
+def _source_to_legacy_params(source: WebScrapingSource) -> Dict[str, Any]:
+    """Map the current source model to the legacy database columns."""
+    return {
+        "id": source.id,
+        "name": source.name,
+        "url": source.url,
+        "type": "html",
+        "category_id": 0,
+        "selectors": json.dumps([field.model_dump() for field in source.config.fields]),
+        "advance_config": source.config.model_dump_json(),
+        "presets": None,
+        "fetch_interval": source.config.schedule.interval_minutes,
+        "is_active": 1 if source.enabled else 0,
+        "last_fetched_at": source.updated_at.isoformat(),
+        "created_at": source.created_at.isoformat(),
+        "content_type": "articles",
+        "scrape_depth": 1,
+        "use_browser": 0 if source.config.browser.headless else 1,
+        "max_pages": source.config.pagination.max_pages,
+        "delay": max(0, source.config.browser.delay_ms // 1000),
+        "pagination_type": source.config.pagination.type,
+        "pagination_selector": source.config.pagination.selector or None,
+        "pagination_pattern": None,
+        "proxy_enabled": 1 if source.config.proxy.enabled else 0,
+        "proxy_provider": None,
+        "proxy_config": json.dumps(source.config.proxy.model_dump()) if source.config.proxy else None,
+        "ssl_verify": 1,
+        "timeout": 30,
+        "connect_timeout": 10
+    }
 
 # Secure storage using keyring
 def get_secure_value(service: str, username: str) -> Optional[str]:

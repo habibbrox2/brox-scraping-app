@@ -147,11 +147,12 @@ class JobConfig(BaseModel):
                 raise ValueError('Local/private URLs not allowed')
             try:
                 import ipaddress
-                if ipaddress.ip_address(host).is_private:
-                    raise ValueError('Local/private URLs not allowed')
+                ip_addr = ipaddress.ip_address(host)
             except ValueError:
                 # Non-IP hosts are allowed; only actual private IPs are blocked.
-                pass
+                return v
+            if ip_addr.is_private:
+                raise ValueError('Local/private URLs not allowed')
         return v
 
     @field_validator('urls')
@@ -222,6 +223,11 @@ class Settings(BaseModel):
     default_user_agent: Optional[str] = None
     default_proxy: Optional[str] = None
 
+    # AI settings
+    ai_enabled: bool = True
+    ai_default_model: str = "google/gemini-flash-1.5"
+    ai_tool_calling: bool = True
+
 class Template(BaseModel):
     """Template model"""
     id: str
@@ -231,6 +237,13 @@ class Template(BaseModel):
     config: JobConfig
     icon: str = "📄"
     created_at: datetime = Field(default_factory=datetime.now)
+
+    @field_validator('category', mode='before')
+    @classmethod
+    def coerce_category(cls, v):
+        if v is None:
+            return "general"
+        return str(v)
 
 class WebScrapingSource(BaseModel):
     """Web scraping source model"""
@@ -243,3 +256,10 @@ class WebScrapingSource(BaseModel):
     enabled: bool = True
     created_at: datetime = Field(default_factory=datetime.now)
     updated_at: datetime = Field(default_factory=datetime.now)
+
+    @field_validator('category', mode='before')
+    @classmethod
+    def coerce_category(cls, v):
+        if v is None:
+            return "general"
+        return str(v)

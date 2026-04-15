@@ -7,6 +7,7 @@ from tkinter import filedialog, messagebox
 import json
 import csv
 import os
+import webbrowser
 
 from app.database import db
 from app.database.models import ScrapedItem
@@ -23,6 +24,7 @@ class ResultsView(ctk.CTkFrame):
         self.items = []
         self.filtered_items = []
         self.selected_job_id = None
+        self._job_lookup = {}
         self.current_page = 0
         self.page_size = 50
         self.total_items = 0
@@ -43,43 +45,49 @@ class ResultsView(ctk.CTkFrame):
     
     def _create_header(self):
         """Create header"""
-        header_frame = ctk.CTkFrame(self)
-        header_frame.grid(row=0, column=0, sticky="ew", padx=20, pady=20)
+        header_frame = ctk.CTkFrame(self, fg_color="transparent")
+        header_frame.grid(row=0, column=0, sticky="ew", padx=24, pady=(20, 12))
         
-        # Title
         title = ctk.CTkLabel(
             header_frame,
             text="Scraped Results",
             font=ctk.CTkFont(size=24, weight="bold")
         )
-        title.pack(side="left", padx=20)
+        title.pack(side="left", padx=(0, 16))
         
-        # Export buttons
-        ctk.CTkButton(
-            header_frame,
-            text="📊 Export CSV",
-            command=self._export_csv
-        ).pack(side="right", padx=10)
+        export_frame = ctk.CTkFrame(header_frame, fg_color="transparent")
+        export_frame.pack(side="right")
         
         ctk.CTkButton(
-            header_frame,
-            text="📋 Export JSON",
-            command=self._export_json
-        ).pack(side="right", padx=10)
+            export_frame,
+            text="Export CSV",
+            command=self._export_csv,
+            width=100,
+            height=32
+        ).pack(side="right", padx=6)
         
         ctk.CTkButton(
-            header_frame,
-            text="📗 Export Excel",
-            command=self._export_excel
-        ).pack(side="right", padx=10)
-    
+            export_frame,
+            text="Export JSON",
+            command=self._export_json,
+            width=100,
+            height=32
+        ).pack(side="right", padx=6)
+        
+        ctk.CTkButton(
+            export_frame,
+            text="Export Excel",
+            command=self._export_excel,
+            width=100,
+            height=32
+        ).pack(side="right", padx=6)
+
     def _create_filters(self):
         """Create filters"""
-        filter_frame = ctk.CTkFrame(self)
-        filter_frame.grid(row=1, column=0, sticky="ew", padx=20, pady=(0, 10))
+        filter_frame = ctk.CTkFrame(self, fg_color="transparent")
+        filter_frame.grid(row=1, column=0, sticky="ew", padx=24, pady=(0, 8))
         
-        # Job filter
-        ctk.CTkLabel(filter_frame, text="Filter by Job:").pack(side="left", padx=10)
+        ctk.CTkLabel(filter_frame, text="Filter by Job:", font=ctk.CTkFont(size=12)).pack(side="left", padx=(0, 8))
         
         self.job_var = ctk.StringVar(value="all")
         self.job_var.trace("w", self._on_job_change)
@@ -87,91 +95,98 @@ class ResultsView(ctk.CTkFrame):
         self.job_combo = ctk.CTkComboBox(
             filter_frame,
             values=self._get_job_options(),
-            variable=self.job_var
+            variable=self.job_var,
+            width=180
         )
-        self.job_combo.pack(side="left", padx=10)
+        self.job_combo.pack(side="left", padx=8)
         
-        # Search
-        ctk.CTkLabel(filter_frame, text="Search:").pack(side="left", padx=20)
+        ctk.CTkLabel(filter_frame, text="Search:", font=ctk.CTkFont(size=12)).pack(side="left", padx=(16, 8))
         
-        self.search_entry = ctk.CTkEntry(filter_frame, width=200)
-        self.search_entry.pack(side="left", padx=10)
+        self.search_entry = ctk.CTkEntry(filter_frame, width=180, height=32)
+        self.search_entry.pack(side="left", padx=8)
         self.search_entry.bind("<KeyRelease>", self._on_search)
         
-        # Refresh
+        self.filter_summary = ctk.CTkLabel(
+            filter_frame,
+            text="",
+            font=ctk.CTkFont(size=11),
+            text_color=("gray40", "gray60"),
+        )
+        self.filter_summary.pack(side="right", padx=16)
+        
         ctk.CTkButton(
             filter_frame,
-            text="🔄 Refresh",
-            command=self._load_results
-        ).pack(side="right", padx=10)
+            text="Refresh",
+            command=self._load_results,
+            width=80,
+            height=32
+        ).pack(side="right", padx=8)
     
     def _create_results_table(self):
         """Create results table"""
-        table_frame = ctk.CTkFrame(self)
-        table_frame.grid(row=2, column=0, sticky="nsew", padx=20, pady=(0, 20))
+        table_frame = ctk.CTkFrame(self, fg_color="transparent")
+        table_frame.grid(row=2, column=0, sticky="nsew", padx=24, pady=(0, 20))
         table_frame.grid_columnconfigure(0, weight=1)
         table_frame.grid_rowconfigure(0, weight=1)
 
-        # Scrollable frame for table
-        self.table = ctk.CTkScrollableFrame(table_frame, label_text="Data")
+        self.table = ctk.CTkScrollableFrame(table_frame, label_text="Data", padx=4, pady=4)
         self.table.grid(row=0, column=0, sticky="nsew")
 
-        # Results count
         self.count_label = ctk.CTkLabel(
             table_frame,
             text="0 items",
             font=ctk.CTkFont(size=12),
-            text_color="gray"
+            text_color=("gray40", "gray60")
         )
-        self.count_label.grid(row=1, column=0, pady=10)
+        self.count_label.grid(row=1, column=0, pady=8)
 
-        # Pagination controls
         pagination_frame = ctk.CTkFrame(table_frame, fg_color="transparent")
-        pagination_frame.grid(row=2, column=0, pady=10)
+        pagination_frame.grid(row=2, column=0, pady=8)
 
         self.prev_button = ctk.CTkButton(
             pagination_frame,
             text="Previous",
             command=self._prev_page,
-            width=80
+            width=80,
+            height=30
         )
-        self.prev_button.pack(side="left", padx=5)
+        self.prev_button.pack(side="left", padx=4)
 
         self.page_label = ctk.CTkLabel(
             pagination_frame,
             text="Page 1 of 1",
             font=ctk.CTkFont(size=12)
         )
-        self.page_label.pack(side="left", padx=20)
+        self.page_label.pack(side="left", padx=16)
 
         self.next_button = ctk.CTkButton(
             pagination_frame,
             text="Next",
             command=self._next_page,
-            width=80
+            width=80,
+            height=30
         )
-        self.next_button.pack(side="left", padx=5)
+        self.next_button.pack(side="left", padx=4)
     
     def _get_job_options(self):
         """Get job filter options"""
         jobs = db.get_all_jobs()
+        self._job_lookup = {}
         options = ["all"]
-        options.extend([job.name for job in jobs])
+        for job in jobs:
+            label = f"{job.name} ({job.id[:8]})"
+            self._job_lookup[label] = job.id
+            options.append(label)
         return options
     
     def _load_results(self):
         """Load results"""
-        job_name = self.job_var.get()
-        if job_name == "all":
+        selected = self.job_var.get()
+        if selected == "all":
             self.items = db.get_all_items()
         else:
-            job = db.get_job_by_name(job_name)
-            if job:
-                self.items = db.get_items_by_job(job.id)
-                self.total_items = len(self.items)
-            else:
-                self.items = []
-                self.total_items = 0
+            job_id = self._job_lookup.get(selected)
+            self.items = db.get_items_by_job(job_id) if job_id else []
         self.current_page = 0
         self._apply_filters()
     
@@ -186,104 +201,107 @@ class ResultsView(ctk.CTkFrame):
 
         self.filtered_items = filtered
         self.current_page = 0
+        active_job = self.job_var.get()
+        self.filter_summary.configure(
+            text=f"Active: {active_job} | Matched: {len(self.filtered_items)}"
+        )
         self._update_pagination()
         self._display_page()
-        
-        self.filtered_items = filtered
-        self._update_table()
-    
+
     def _on_job_change(self, *args):
         """Handle job filter change"""
-        self._apply_filters()
+        self._load_results()
     
     def _on_search(self, event):
         """Handle search input"""
         self._apply_filters()
-    
+
     def _update_table(self):
-        """Update results table"""
-        # Clear current table
-        for widget in self.table.winfo_children():
-            widget.destroy()
-        
-        if not self.filtered_items:
-            empty_label = ctk.CTkLabel(
-                self.table,
-                text="No results yet. Run a job to scrape data!",
-                font=ctk.CTkFont(size=14),
-                text_color="gray"
-            )
-            empty_label.pack(pady=40)
-            self.count_label.configure(text="0 items")
-            return
-        
-        # Show items
-        for idx, item in enumerate(self.filtered_items[:100]):  # Limit to 100 for performance
-            self._create_item_row(item, idx)
-        
-        self.count_label.configure(text=f"{len(self.filtered_items)} items")
-    
+        """Compatibility helper for refreshing the current page."""
+        self._update_pagination()
+        self._display_page()
+
     def _create_item_row(self, item: ScrapedItem, idx: int):
         """Create item row"""
         row = ctk.CTkFrame(self.table, fg_color=("gray85", "gray17") if idx % 2 else "transparent")
-        row.pack(fill="x", pady=2)
+        row.pack(fill="x", pady=2, padx=4)
         
-        # Get job name
         job = db.get_job(item.job_id)
         job_name = job.name if job else "Unknown"
         
-        # ID
         id_label = ctk.CTkLabel(
             row,
             text=item.id[:8] + "...",
             font=ctk.CTkFont(size=10),
-            width=80
+            width=70
         )
-        id_label.pack(side="left", padx=5, pady=5)
+        id_label.pack(side="left", padx=4, pady=8)
         
-        # Job
         job_label = ctk.CTkLabel(
             row,
             text=job_name,
             font=ctk.CTkFont(size=10),
-            width=100
+            width=90
         )
-        job_label.pack(side="left", padx=5, pady=5)
+        job_label.pack(side="left", padx=4, pady=8)
         
-        # Date
         date_str = item.created_at.strftime("%Y-%m-%d %H:%M") if item.created_at else ""
         date_label = ctk.CTkLabel(
             row,
             text=date_str,
             font=ctk.CTkFont(size=10),
-            width=120
+            width=100
         )
-        date_label.pack(side="left", padx=5, pady=5)
+        date_label.pack(side="left", padx=4, pady=8)
         
-        # Data preview
-        data_preview = json.dumps(item.data)[:60] + "..." if len(json.dumps(item.data)) > 60 else json.dumps(item.data)
+        data_preview = json.dumps(item.data)[:50] + "..." if len(json.dumps(item.data)) > 50 else json.dumps(item.data)
         
         data_label = ctk.CTkLabel(
             row,
             text=data_preview,
-            font=ctk.CTkFont(size=11),
+            font=ctk.CTkFont(size=10),
             anchor="w"
         )
-        data_label.pack(side="left", padx=5, pady=5, fill="x", expand=True)
-        
-        # View button
+        data_label.pack(side="left", padx=4, pady=8, fill="x", expand=True)
+
+        action_frame = ctk.CTkFrame(row, fg_color="transparent")
+        action_frame.pack(side="right", padx=4)
+
         ctk.CTkButton(
-            row,
-            text="👁 View",
+            action_frame,
+            text="View",
             command=lambda i=item: self._view_item(i),
+            width=54,
+            height=24
+        ).pack(side="left", padx=2)
+
+        ctk.CTkButton(
+            action_frame,
+            text="Copy",
+            command=lambda i=item: self._copy_item(i),
+            width=54,
+            height=24
+        ).pack(side="left", padx=2)
+
+        ctk.CTkButton(
+            action_frame,
+            text="Open",
+            command=lambda i=item: self._open_item_url(i),
+            width=54,
+            height=24
+        ).pack(side="left", padx=2)
+
+        ctk.CTkButton(
+            action_frame,
+            text="Delete",
+            command=lambda i=item: self._delete_item(i),
             width=60,
-            height=25
-        ).pack(side="right", padx=5)
+            height=24,
+            fg_color=("#b91c1c", "#dc2626")
+        ).pack(side="left", padx=2)
     
     def _view_item(self, item: ScrapedItem):
         """View item details"""
-        from tkinter import simpledialog
-        
         # Show item in dialog
         data_str = json.dumps(item.data, indent=2)
         
@@ -308,36 +326,35 @@ class ResultsView(ctk.CTkFrame):
             text="Close",
             command=dialog.destroy
         ).pack(pady=10)
-    
-    def _on_job_change(self, *args):
-        """On job filter change"""
-        selected = self.job_var.get()
-        
-        if selected == "all":
-            self.filtered_items = self.items
-        else:
-            jobs = db.get_all_jobs()
-            job = next((j for j in jobs if j.name == selected), None)
-            if job:
-                self.filtered_items = [i for i in self.items if i.job_id == job.id]
+
+    def _copy_item(self, item: ScrapedItem):
+        """Copy item JSON to the clipboard."""
+        data_str = json.dumps(item.data, indent=2, ensure_ascii=False)
+        self.clipboard_clear()
+        self.clipboard_append(data_str)
+        messagebox.showinfo("Copied", "Item JSON copied to clipboard")
+
+    def _open_item_url(self, item: ScrapedItem):
+        """Open the scraped URL in a browser."""
+        if not item.url:
+            messagebox.showwarning("No URL", "This item does not have a URL")
+            return
+        webbrowser.open(item.url)
+
+    def _delete_item(self, item: ScrapedItem):
+        """Delete a single scraped item."""
+        if not messagebox.askyesno("Delete Item", "Delete this scraped item?"):
+            return
+
+        try:
+            if db.delete_item(item.id):
+                self._load_results()
+                messagebox.showinfo("Deleted", "Item deleted successfully")
             else:
-                self.filtered_items = []
-        
-        self._update_table()
-    
-    def _on_search(self, event):
-        """On search"""
-        search_text = self.search_entry.get().lower()
-        
-        if not search_text:
-            self.filtered_items = self.items
-        else:
-            self.filtered_items = [
-                i for i in self.items 
-                if search_text in json.dumps(i.data).lower() or search_text in i.url.lower()
-            ]
-        
-        self._update_table()
+                messagebox.showwarning("Not Found", "Item was not found")
+        except Exception as e:
+            logger.error(f"Failed to delete item {item.id}: {e}")
+            messagebox.showerror("Error", f"Failed to delete item:\n{e}")
     
     def _export_csv(self):
         """Export to CSV"""
@@ -422,7 +439,6 @@ class ResultsView(ctk.CTkFrame):
 
     def _display_page(self):
         """Display current page of results"""
-        # Clear table
         for widget in self.table.winfo_children():
             widget.destroy()
 
@@ -430,34 +446,34 @@ class ResultsView(ctk.CTkFrame):
         end_idx = start_idx + self.page_size
         page_items = self.filtered_items[start_idx:end_idx]
 
-        # Update count
         self.count_label.configure(text=f"{len(self.filtered_items)} items (showing {len(page_items)})")
 
         if not page_items:
-            no_data_label = ctk.CTkLabel(
-                self.table,
+            empty_frame = ctk.CTkFrame(self.table, fg_color="transparent")
+            empty_frame.pack(fill="both", expand=True, pady=60)
+            
+            ctk.CTkLabel(
+                empty_frame,
+                text="📭",
+                font=ctk.CTkFont(size=40)
+            ).pack(pady=(0, 12))
+            
+            ctk.CTkLabel(
+                empty_frame,
                 text="No results found",
-                font=ctk.CTkFont(size=14),
-                text_color="gray"
-            )
-            no_data_label.pack(pady=40)
+                font=ctk.CTkFont(size=16, weight="bold"),
+            ).pack(pady=(0, 4))
+            
+            ctk.CTkLabel(
+                empty_frame,
+                text="Run a job to see scraped data here",
+                font=ctk.CTkFont(size=12),
+                text_color=("gray50", "gray60"),
+            ).pack()
             return
 
-        # Display items
         for i, item in enumerate(page_items):
-            item_frame = ctk.CTkFrame(self.table)
-            item_frame.pack(fill="x", padx=10, pady=5)
-
-            # Item data
-            data_text = json.dumps(item.data, indent=2, ensure_ascii=False)
-            data_label = ctk.CTkLabel(
-                item_frame,
-                text=data_text,
-                font=ctk.CTkFont(size=10),
-                anchor="w",
-                justify="left"
-            )
-            data_label.pack(fill="x", padx=10, pady=5)
+            self._create_item_row(item, i)
 
     def _prev_page(self):
         """Go to previous page"""

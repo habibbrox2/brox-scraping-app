@@ -12,6 +12,10 @@ try:
     PLAYWRIGHT_AVAILABLE = True
 except ImportError:
     PLAYWRIGHT_AVAILABLE = False
+    async_playwright = None
+    Page = Any
+    Browser = Any
+    BrowserContext = Any
 
 from app.utils.logger import get_logger
 
@@ -23,6 +27,8 @@ class PlaywrightService:
     _instance = None
     _playwright = None
     _browser: Optional[Browser] = None
+    _missing_browser_logged = False
+    _browser_unavailable = False
     
     def __new__(cls):
         if cls._instance is None:
@@ -30,14 +36,15 @@ class PlaywrightService:
         return cls._instance
     
     def __init__(self):
-        if not PLAYWRIGHT_AVAILABLE:
-            raise RuntimeError("Playwright is not installed. Run: pip install playwright")
         self._initialized = False
     
     async def initialize(self):
         """Initialize Playwright"""
         if self._initialized:
             return
+
+        if not PLAYWRIGHT_AVAILABLE:
+            raise RuntimeError("Playwright is not installed. Run: pip install playwright")
         
         try:
             self._playwright = await async_playwright().start()
@@ -46,12 +53,37 @@ class PlaywrightService:
         except Exception as e:
             logger.error(f"Failed to initialize Playwright: {e}")
             raise
+
+    def _browser_binary_exists(self) -> bool:
+        """Return whether the bundled Chromium executable is present."""
+        if not self._playwright:
+            return False
+
+        executable_path = getattr(self._playwright.chromium, "executable_path", None)
+        if not executable_path:
+            return False
+
+        return os.path.exists(executable_path)
+
+    def _log_missing_browser_once(self):
+        """Log the missing browser warning only once per app session."""
+        if not self.__class__._missing_browser_logged:
+            logger.info("Playwright browser binaries are not installed. Run: playwright install")
+            self.__class__._missing_browser_logged = True
     
     async def launch_browser(self, headless: bool = False, user_agent: Optional[str] = None, 
                            proxy: Optional[str] = None) -> Browser:
         """Launch a browser instance"""
+        if self.__class__._browser_unavailable:
+            raise RuntimeError("Playwright browser binaries are not installed. Run: playwright install")
+
         if not self._initialized:
             await self.initialize()
+
+        if not self._browser_binary_exists():
+            self._log_missing_browser_once()
+            self.__class__._browser_unavailable = True
+            raise RuntimeError("Playwright browser binaries are not installed. Run: playwright install")
         
         # Browser launch options
         launch_options = {
@@ -67,7 +99,15 @@ class PlaywrightService:
         if proxy:
             launch_options["proxy"] = {"server": proxy}
         
-        self._browser = await self._playwright.chromium.launch(**launch_options)
+        try:
+            self._browser = await self._playwright.chromium.launch(**launch_options)
+        except Exception as e:
+            message = str(e).lower()
+            if "executable doesn't exist" in message or "browser binaries are not installed" in message:
+                self._log_missing_browser_once()
+                self.__class__._browser_unavailable = True
+                raise RuntimeError("Playwright browser binaries are not installed. Run: playwright install")
+            raise
         logger.info(f"Browser launched (headless={headless})")
         return self._browser
     

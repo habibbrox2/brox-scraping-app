@@ -2,276 +2,284 @@
 Main window for ScrapMaster Desktop
 """
 
-import os
 import sys
 import customtkinter as ctk
-from typing import Optional, Callable
 
 from app.utils.logger import get_logger
 
 logger = get_logger()
 
+
 class MainWindow(ctk.CTk):
-    """Main application window"""
-    
+    """Main application window."""
+
     def __init__(self):
         super().__init__()
-        
-        # Configure window
+
         self.title("ScrapMaster Desktop")
-        self.geometry("1400x900")
-        self.minsize(1200, 700)
-        
-        # Configure grid
-        self.grid_columnconfigure(1, weight=1)
-        self.grid_rowconfigure(0, weight=1)
-        
-        # Set appearance
+        self.geometry("1440x920")
+        self.minsize(1200, 720)
+
         ctk.set_appearance_mode("dark")
         ctk.set_default_color_theme("blue")
-        
-        # State
+
         self.current_view = "dashboard"
         self._sidebar_frame = None
         self._content_frame = None
-        
-        # Create UI
+        self._header_title = None
+        self.nav_buttons = {}
+
+        self.grid_columnconfigure(1, weight=1)
+        self.grid_rowconfigure(0, weight=1)
+
         self._create_sidebar()
         self._create_content_area()
-        
-        # Show dashboard by default
+        self._apply_palette()
+
         self.show_dashboard()
-        
+        self._update_header("dashboard", "Dashboard")
+
         logger.info("Main window initialized")
-    
+
+    def _apply_palette(self):
+        """Apply a cohesive visual palette."""
+        self.configure(fg_color=("#f4f6fb", "#0f172a"))
+        if self._sidebar_frame:
+            self._sidebar_frame.configure(fg_color=("#e9edf7", "#111827"))
+        if self._content_frame:
+            self._content_frame.configure(fg_color=("#f8fafc", "#0b1220"))
+
     def _create_sidebar(self):
-        """Create sidebar navigation"""
-        self._sidebar_frame = ctk.CTkFrame(self, width=250, corner_radius=0)
+        """Create sidebar navigation."""
+        self._sidebar_frame = ctk.CTkFrame(self, width=270, corner_radius=0)
         self._sidebar_frame.grid(row=0, column=0, sticky="nsew")
-        self._sidebar_frame.grid_rowconfigure(8, weight=1)
-        
-        # Logo/Title
+        self._sidebar_frame.grid_rowconfigure(12, weight=1)
+
         title_label = ctk.CTkLabel(
             self._sidebar_frame,
             text="ScrapMaster",
-            font=ctk.CTkFont(size=24, weight="bold")
+            font=ctk.CTkFont(size=26, weight="bold"),
+            text_color=("#0f172a", "#f8fafc"),
         )
-        title_label.grid(row=0, column=0, padx=20, pady=(20, 10))
-        
+        title_label.grid(row=0, column=0, padx=20, pady=(24, 2), sticky="w")
+
         subtitle_label = ctk.CTkLabel(
             self._sidebar_frame,
-            text="Desktop Web Scraper",
-            font=ctk.CTkFont(size=12)
+            text="Reliable Desktop Scraping",
+            font=ctk.CTkFont(size=12),
+            text_color=("#475569", "#94a3b8"),
         )
-        subtitle_label.grid(row=1, column=0, padx=20, pady=(0, 20))
-        
-        # Navigation buttons
+        subtitle_label.grid(row=1, column=0, padx=20, pady=(0, 16), sticky="w")
+
         nav_items = [
-            ("dashboard", "🏠", "Dashboard"),
-            ("new_job", "➕", "New Job"),
-            ("my_jobs", "📋", "My Jobs"),
-            ("results", "📊", "Results"),
-            ("templates", "📄", "Templates"),
-            ("sources", "🌐", "Sources"),
-            ("ai_chat", "🤖", "AI Chat"),
-            ("settings", "⚙️", "Settings"),
+            ("dashboard", "Dashboard"),
+            ("new_job", "New Job"),
+            ("my_jobs", "My Jobs"),
+            ("results", "Results"),
+            ("templates", "Templates"),
+            ("sources", "Sources"),
+            ("ai_chat", "AI Chat"),
+            ("settings", "Settings"),
         ]
-        
-        self.nav_buttons = {}
-        
-        for idx, (view_id, icon, label) in enumerate(nav_items):
+
+        for idx, (view_id, label) in enumerate(nav_items):
             btn = ctk.CTkButton(
                 self._sidebar_frame,
-                text=f"  {icon} {label}",
+                text=label,
                 command=lambda v=view_id: self.navigate_to(v),
                 fg_color="transparent",
-                text_color=("gray10", "gray90"),
-                hover_color=("gray70", "gray30"),
+                text_color=("#1e293b", "#e2e8f0"),
+                hover_color=("#dbe4f8", "#1f2937"),
                 anchor="w",
-                height=45
+                corner_radius=10,
+                height=42,
+                font=ctk.CTkFont(size=14, weight="bold"),
             )
-            btn.grid(row=2 + idx, column=0, padx=20, pady=5, sticky="ew")
+            btn.grid(row=2 + idx, column=0, padx=14, pady=4, sticky="ew")
             self.nav_buttons[view_id] = btn
-        
-        # Theme toggle at bottom
+
         self.theme_toggle = ctk.CTkSwitch(
             self._sidebar_frame,
             text="Dark Mode",
             command=self._toggle_theme,
             onvalue="dark",
-            offvalue="light"
+            offvalue="light",
         )
-        self.theme_toggle.grid(row=8, column=0, padx=20, pady=20, sticky="s")
+        self.theme_toggle.grid(row=12, column=0, padx=20, pady=(14, 6), sticky="sw")
         self.theme_toggle.select()
-        
-        # Version info
+
         version_label = ctk.CTkLabel(
             self._sidebar_frame,
             text="v1.0.0",
             font=ctk.CTkFont(size=10),
-            text_color="gray"
+            text_color=("#64748b", "#64748b"),
         )
-        version_label.grid(row=9, column=0, padx=20, pady=(0, 10))
-    
+        version_label.grid(row=13, column=0, padx=20, pady=(0, 14), sticky="sw")
+
     def _create_content_area(self):
-        """Create main content area"""
-        self._content_frame = ctk.CTkFrame(self, corner_radius=0)
-        self._content_frame.grid(row=0, column=1, sticky="nsew", padx=0, pady=0)
+        """Create main content area with a contextual header."""
+        wrapper = ctk.CTkFrame(self, corner_radius=0, fg_color="transparent")
+        wrapper.grid(row=0, column=1, sticky="nsew")
+        wrapper.grid_rowconfigure(1, weight=1)
+        wrapper.grid_columnconfigure(0, weight=1)
+
+        header = ctk.CTkFrame(wrapper, corner_radius=0)
+        header.grid(row=0, column=0, sticky="ew", padx=0, pady=0)
+
+        self._header_title = ctk.CTkLabel(
+            header,
+            text="Dashboard",
+            font=ctk.CTkFont(size=20, weight="bold"),
+            text_color=("#0f172a", "#f8fafc"),
+        )
+        self._header_title.pack(side="left", padx=20, pady=14)
+
+        self._content_frame = ctk.CTkFrame(wrapper, corner_radius=0)
+        self._content_frame.grid(row=1, column=0, sticky="nsew")
         self._content_frame.grid_rowconfigure(0, weight=1)
         self._content_frame.grid_columnconfigure(0, weight=1)
-    
-    def navigate_to(self, view: str):
-        """Navigate to a view"""
-        self.current_view = view
-        
-        # Update button states
+
+    def _set_nav_button_state(self, active_view: str):
         for view_id, btn in self.nav_buttons.items():
-            if view_id == view:
-                btn.configure(fg_color=("gray75", "gray25"))
+            if view_id == active_view:
+                btn.configure(
+                    fg_color=("#c9dafd", "#2563eb"),
+                    text_color=("#0b1f44", "#f8fafc"),
+                )
             else:
-                btn.configure(fg_color="transparent")
-        
-        # Show appropriate view
-        if view == "dashboard":
-            self.show_dashboard()
-        elif view == "new_job":
-            self.show_new_job()
-        elif view == "my_jobs":
-            self.show_my_jobs()
-        elif view == "results":
-            self.show_results()
-        elif view == "templates":
-            self.show_templates()
-        elif view == "sources":
-            self.show_sources()
-        elif view == "ai_chat":
-            self.show_ai_chat()
-        elif view == "settings":
-            self.show_settings()
-    
+                btn.configure(
+                    fg_color="transparent",
+                    text_color=("#1e293b", "#e2e8f0"),
+                )
+
+    def _update_header(self, view_id: str, label: str):
+        self.current_view = view_id
+        if self._header_title:
+            self._header_title.configure(text=label)
+        self._set_nav_button_state(view_id)
+
+    def navigate_to(self, view: str):
+        """Navigate to a view."""
+        routes = {
+            "dashboard": ("Dashboard", self.show_dashboard),
+            "new_job": ("New Job", self.show_new_job),
+            "my_jobs": ("My Jobs", self.show_my_jobs),
+            "results": ("Results", self.show_results),
+            "templates": ("Templates", self.show_templates),
+            "sources": ("Sources", self.show_sources),
+            "ai_chat": ("AI Chat", self.show_ai_chat),
+            "settings": ("Settings", self.show_settings),
+        }
+
+        label, handler = routes.get(view, ("Dashboard", self.show_dashboard))
+        self._update_header(view, label)
+        handler()
+
     def show_dashboard(self):
-        """Show dashboard view"""
         from app.gui.dashboard import DashboardView
         self._clear_content()
         DashboardView(self._content_frame).pack(fill="both", expand=True)
-    
+
     def show_new_job(self):
-        """Show new job view"""
         from app.gui.job_form import JobFormView
         self._clear_content()
         JobFormView(self._content_frame).pack(fill="both", expand=True)
-    
+
     def show_my_jobs(self):
-        """Show my jobs view"""
         from app.gui.job_list import JobListView
         self._clear_content()
         JobListView(self._content_frame).pack(fill="both", expand=True)
-    
+
     def show_results(self):
-        """Show results view"""
         from app.gui.results import ResultsView
         self._clear_content()
         ResultsView(self._content_frame).pack(fill="both", expand=True)
-    
+
     def show_templates(self):
-        """Show templates view"""
         from app.gui.templates import TemplatesView
         self._clear_content()
         TemplatesView(self._content_frame).pack(fill="both", expand=True)
 
     def show_sources(self):
-        """Show sources view"""
         from app.gui.sources import SourcesView
         self._clear_content()
         SourcesView(self._content_frame).pack(fill="both", expand=True)
 
     def show_ai_chat(self):
-        """Show AI chat - opens as popup"""
         from app.gui.ai_chat import AIChatPopup
-        
-        # Open as popup
         AIChatPopup(self)
-    
+
     def show_settings(self):
-        """Show settings view"""
         from app.gui.settings import SettingsView
         self._clear_content()
         SettingsView(self._content_frame).pack(fill="both", expand=True)
-    
+
     def _clear_content(self):
-        """Clear content area"""
         for widget in self._content_frame.winfo_children():
             widget.destroy()
-    
+
     def _toggle_theme(self):
-        """Toggle dark/light theme"""
         if self.theme_toggle.get() == "dark":
             ctk.set_appearance_mode("dark")
         else:
             ctk.set_appearance_mode("light")
-    
+        self._apply_palette()
+
     def run(self):
-        """Run the application"""
         self.mainloop()
 
 
 def main():
-    """Main entry point"""
+    """Main entry point."""
     try:
         app = MainWindow()
-        
-        # Create system tray icon
+
         import pystray
         from PIL import Image
         import threading
-        
+
         def show_window(icon, item):
             app.deiconify()
             app.lift()
             app.focus_force()
-        
+
         def hide_window(icon, item):
             app.withdraw()
-        
+
         def quit_app(icon, item):
             icon.stop()
             app.quit()
-        
-        # Load icon (use a default if not found)
+
         try:
             icon_image = Image.open("app/assets/icon.png")
-        except:
-            # Create a simple icon
-            icon_image = Image.new('RGB', (64, 64), color='blue')
-        
+        except Exception:
+            icon_image = Image.new("RGB", (64, 64), color="#2563eb")
+
         menu = pystray.Menu(
-            pystray.MenuItem('Show', show_window),
-            pystray.MenuItem('Hide', hide_window),
+            pystray.MenuItem("Show", show_window),
+            pystray.MenuItem("Hide", hide_window),
             pystray.Menu.SEPARATOR,
-            pystray.MenuItem('Quit', quit_app)
+            pystray.MenuItem("Quit", quit_app),
         )
-        
+
         icon = pystray.Icon("ScrapMaster", icon_image, "ScrapMaster Desktop", menu)
-        
-        # Start tray icon in background thread
+
         def run_tray():
             icon.run()
-        
-        tray_thread = threading.Thread(target=run_tray, daemon=True)
-        tray_thread.start()
-        
-        # Minimize to tray on close
+
+        threading.Thread(target=run_tray, daemon=True).start()
+
         def on_closing():
             app.withdraw()
-            return False  # Don't destroy
-        
+            return False
+
         app.protocol("WM_DELETE_WINDOW", on_closing)
-        
         app.run()
-        
+
     except Exception as e:
         logger.error(f"Application error: {e}")
         import traceback
+
         traceback.print_exc()
         sys.exit(1)
 

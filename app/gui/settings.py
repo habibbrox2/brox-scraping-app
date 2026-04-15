@@ -5,6 +5,7 @@ Settings view for ScrapMaster Desktop
 import customtkinter as ctk
 from tkinter import messagebox, filedialog
 import os
+import keyring
 
 from app.database.models import Settings
 from app.database import db
@@ -151,6 +152,65 @@ class SettingsView(ctk.CTkFrame):
         )
         log_combo.pack(pady=10, padx=20, anchor="w")
 
+        # AI settings
+        ai_frame = ctk.CTkFrame(scrollable)
+        ai_frame.pack(fill="x", pady=10)
+
+        ctk.CTkLabel(
+            ai_frame,
+            text="AI Assistant",
+            font=ctk.CTkFont(size=16, weight="bold")
+        ).pack(pady=10, padx=20, anchor="w")
+
+        # API Key
+        self.api_key_entry = self._create_input_field(
+            ai_frame,
+            "OpenRouter API Key:",
+            keyring.get_password("scrapmaster", "openrouter_api_key") or ""
+        )
+        self.api_key_entry.configure(show="*")
+
+        # Default model
+        ctk.CTkLabel(ai_frame, text="Default AI Model:").pack(pady=5, anchor="w")
+        self.model_var = ctk.StringVar(value="google/gemini-flash-1.5")
+        model_combo = ctk.CTkComboBox(
+            ai_frame,
+            values=[
+                "google/gemini-flash-1.5",
+                "meta-llama/llama-3.2-1b-instruct",
+                "mistralai/mistral-7b-instruct",
+                "openai/gpt-4o-mini",
+                "openai/gpt-4o",
+                "anthropic/claude-3.5-sonnet"
+            ],
+            variable=self.model_var
+        )
+        model_combo.pack(fill="x", padx=20)
+
+        # Enable tool calling
+        self.tool_calling_var = ctk.BooleanVar(value=True)
+        ctk.CTkCheckBox(
+            ai_frame,
+            text="Enable Tool Calling (function calling)",
+            variable=self.tool_calling_var
+        ).pack(pady=10, padx=20, anchor="w")
+
+        # Enable AI chat
+        self.ai_enabled_var = ctk.BooleanVar(value=True)
+        ctk.CTkCheckBox(
+            ai_frame,
+            text="Enable AI Assistant",
+            variable=self.ai_enabled_var
+        ).pack(pady=10, padx=20, anchor="w")
+
+        # Test AI connection
+        ctk.CTkButton(
+            ai_frame,
+            text="Test AI Connection",
+            command=self._test_ai_connection,
+            width=150
+        ).pack(pady=10, padx=20, anchor="w")
+
         # Save button
         button_frame = ctk.CTkFrame(scrollable)
         button_frame.pack(fill="x", pady=20)
@@ -208,6 +268,16 @@ class SettingsView(ctk.CTkFrame):
     def _save_settings(self):
         """Save settings"""
         try:
+            # Save AI settings
+            api_key = self.api_key_entry.get().strip()
+            if api_key:
+                keyring.set_password("scrapmaster", "openrouter_api_key", api_key)
+            else:
+                try:
+                    keyring.delete_password("scrapmaster", "openrouter_api_key")
+                except:
+                    pass
+
             settings = Settings(
                 max_concurrent_jobs=int(self.concurrent_entry.get() or "3"),
                 default_headless=self.headless_var.get(),
@@ -216,14 +286,17 @@ class SettingsView(ctk.CTkFrame):
                 auto_update_check=self.auto_update_var.get(),
                 dark_mode=self.dark_mode_var.get(),
                 log_level=self.log_level_var.get(),
-                default_user_agent=self.ua_entry.get() or None
+                default_user_agent=self.ua_entry.get() or None,
+                ai_enabled=self.ai_enabled_var.get(),
+                ai_default_model=self.model_var.get(),
+                ai_tool_calling=self.tool_calling_var.get()
             )
-            
+
             db.save_settings(settings)
-            
+
             messagebox.showinfo("Success", "Settings saved!")
             logger.info("Settings saved")
-            
+
         except Exception as e:
             messagebox.showerror("Error", f"Failed to save settings: {e}")
             logger.error(f"Save settings error: {e}")
@@ -233,10 +306,56 @@ class SettingsView(ctk.CTkFrame):
         if messagebox.askyesno("Reset Settings", "Reset all settings to defaults?"):
             self.settings = Settings()
             db.save_settings(self.settings)
-            
+
             # Refresh UI
             messagebox.showinfo("Success", "Settings reset to defaults!")
             self._create_settings()
+
+    def _test_ai_connection(self):
+        """Test AI connection"""
+        api_key = self.api_key_entry.get().strip()
+        model = self.model_var.get()
+
+        if not api_key:
+            messagebox.showerror("Error", "Please enter an API key first")
+            return
+
+        try:
+            import requests
+            import threading
+
+            def test_connection():
+                try:
+                    payload = {
+                        "model": model,
+                        "messages": [{"role": "user", "content": "Hello, can you respond with just 'Connection successful' if you receive this?"}]
+                    }
+
+                    headers = {
+                        "Authorization": f"Bearer {api_key}",
+                        "Content-Type": "application/json"
+                    }
+
+                    response = requests.post(
+                        "https://openrouter.ai/api/v1/chat/completions",
+                        json=payload,
+                        headers=headers,
+                        timeout=30
+                    )
+
+                    if response.status_code == 200:
+                        self.after(0, lambda: messagebox.showinfo("Success", f"AI connection successful!\nModel: {model}"))
+                    else:
+                        self.after(0, lambda: messagebox.showerror("Error", f"API Error: {response.status_code}\n{response.text}"))
+
+                except Exception as e:
+                    self.after(0, lambda: messagebox.showerror("Error", f"Connection failed: {str(e)}"))
+
+            threading.Thread(target=test_connection, daemon=True).start()
+            messagebox.showinfo("Testing", "Testing AI connection...")
+
+        except ImportError:
+            messagebox.showerror("Error", "Requests library not available")
     
     def _load_sources(self):
         """Load sources into the list"""

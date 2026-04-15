@@ -6,7 +6,7 @@ import asyncio
 import re
 import json
 from datetime import datetime
-from typing import List, Dict, Any, Optional, Callable
+from typing import List, Dict, Any, Optional, Callable, Tuple
 from concurrent.futures import ThreadPoolExecutor
 import threading
 
@@ -61,7 +61,7 @@ class ScraperEngine:
             
             # Collect all URLs to scrape
             urls = job.config.urls or [job.config.url]
-            all_items = []
+            all_items: List[Tuple[str, Dict[str, Any]]] = []
             
             for url_idx, url in enumerate(urls):
                 if not self._running:
@@ -70,43 +70,48 @@ class ScraperEngine:
                 self._emit("progress", job.id, url_idx + 1, len(urls), f"Scraping: {url}")
                 
                 try:
-                    # Scrape URL
-                    items = await self._scrape_url(job, url, progress_callback)
-                    all_items.extend(items)
-                    
-                    result.success_count += len(items)
+                    if job.config.pagination.enabled and job.config.pagination.type == "next_button":
+                        pagination_items = await self._scrape_paginated_pages(
+                            job,
+                            job.config.pagination,
+                            progress_callback,
+                            start_url=url,
+                        )
+                        all_items.extend(pagination_items)
+                        result.success_count += len(pagination_items)
+                    else:
+                        # Scrape URL
+                        items = await self._scrape_url(job, url, progress_callback)
+                        all_items.extend((url, item) for item in items)
+                        result.success_count += len(items)
+
+                        if job.config.pagination.enabled and job.config.pagination.type == "page_number":
+                            pagination_items = await self._handle_pagination(job, url, progress_callback)
+                            all_items.extend(pagination_items)
+                            result.success_count += len(pagination_items)
                     
                 except Exception as e:
                     logger.error(f"Error scraping {url}: {e}")
                     result.failure_count += 1
-                    
-                    # Handle pagination
-                    if job.config.pagination.enabled:
-                        try:
-                            pagination_items = await self._handle_pagination(job, url, progress_callback)
-                            all_items.extend(pagination_items)
-                            result.success_count += len(pagination_items)
-                        except Exception as pe:
-                            logger.error(f"Pagination error: {pe}")
                 
                 # Update progress
                 if progress_callback:
                     progress_callback(job.id, url_idx + 1, len(urls), f"Processed {url}")
-            
+             
             # Save items to database
-            for item_data in all_items:
+            for item_url, item_data in all_items:
                 item = ScrapedItem(
                     id=generate_unique_id(),
                     job_id=job.id,
                     data=item_data,
-                    url=url
+                    url=item_url
                 )
                 db.create_item(item)
             
             # Post items to API if configured
             if job.config.api.enabled and job.config.api.url:
                 try:
-                    await self._post_items_to_api(job, all_items)
+                    await self._post_items_to_api(job, [item_data for _, item_data in all_items])
                     logger.info(f"Posted {len(all_items)} items to API for job {job.name}")
                 except Exception as e:
                     logger.error(f"Failed to post items to API for job {job.name}: {e}")
@@ -149,12 +154,14 @@ class ScraperEngine:
 
         # Try Playwright first, fallback to requests
         try:
-            if not job.config.browser.headless:
-                # Use Playwright for dynamic content
-                items = await self._scrape_with_playwright(job, url)
+            items = await self._scrape_with_playwright(job, url)
+        except RuntimeError as e:
+            message = str(e).lower()
+            if "browser binaries are not installed" in message or "executable doesn't exist" in message:
+                pass
             else:
-                # Use requests for static content
-                items = await self._scrape_with_requests(job, url)
+                logger.warning(f"Playwright failed, falling back to requests: {e}")
+            items = await self._scrape_with_requests(job, url)
         except Exception as e:
             logger.warning(f"Playwright failed, falling back to requests: {e}")
             items = await self._scrape_with_requests(job, url)
@@ -193,7 +200,7 @@ class ScraperEngine:
             content = await page.content()
             
             # Parse with BeautifulSoup
-            items = self._parse_content(job, content)
+            items = self._parse_content(job, content, url)
             
         finally:
             await page.close()
@@ -212,11 +219,11 @@ class ScraperEngine:
         response = await loop.run_in_executor(self._executor, lambda: requests.get(url, headers=headers, timeout=30))
         response.raise_for_status()
 
-        items = self._parse_content(job, response.text)
+        items = self._parse_content(job, response.text, response.url)
 
         return items
-    
-    def _parse_content(self, job: Job, content: str) -> List[Dict[str, Any]]:
+
+    def _parse_content(self, job: Job, content: str, page_url: str) -> List[Dict[str, Any]]:
         """Parse HTML content"""
         soup = BeautifulSoup(content, "lxml")
         
@@ -226,6 +233,10 @@ class ScraperEngine:
         if job.config.root_selector:
             root_elements = soup.select(job.config.root_selector)
         else:
+            root_elements = [soup]
+
+        # If root selector is too strict, fall back to the full document.
+        if not root_elements:
             root_elements = [soup]
         
         for element in root_elements:
@@ -239,10 +250,42 @@ class ScraperEngine:
                     logger.debug(f"Error extracting field {field.name}: {e}")
                     item[field.name] = field.default_value or ""
             
-            if item:
+            # Keep item only when at least one field produced meaningful content.
+            if any(str(v).strip() for v in item.values()):
                 items.append(item)
         
+        if not items:
+            items.append(self._build_default_item(soup, page_url))
+        
         return items
+
+    def _build_default_item(self, soup: BeautifulSoup, page_url: str) -> Dict[str, Any]:
+        """Build a generic fallback record when no custom fields are configured."""
+        title = ""
+        if soup.title and soup.title.get_text(strip=True):
+            title = clean_text(soup.title.get_text(strip=True))
+
+        description = ""
+        meta_desc = soup.select_one("meta[name='description']")
+        if meta_desc and meta_desc.get("content"):
+            description = clean_text(meta_desc.get("content", ""))
+
+        headline = ""
+        h1 = soup.select_one("h1")
+        if h1:
+            headline = clean_text(h1.get_text(" ", strip=True))
+
+        text_content = clean_text(soup.get_text(" ", strip=True))
+        if len(text_content) > 8000:
+            text_content = text_content[:8000]
+
+        return {
+            "source_url": page_url,
+            "title": title,
+            "headline": headline,
+            "description": description,
+            "text": text_content,
+        }
     
     def _extract_field(self, element: BeautifulSoup, field: FieldConfig) -> str:
         """Extract a single field from element"""
@@ -294,7 +337,7 @@ class ScraperEngine:
         
         return value
     
-    async def _handle_pagination(self, job: Job, url: str, progress_callback: Optional[Callable] = None) -> List[Dict[str, Any]]:
+    async def _handle_pagination(self, job: Job, url: str, progress_callback: Optional[Callable] = None) -> List[Tuple[str, Dict[str, Any]]]:
         """Handle pagination"""
         items = []
         
@@ -305,21 +348,19 @@ class ScraperEngine:
         max_pages = pagination.max_pages
         start_page = pagination.start_page
         
+        if pagination.type != "page_number":
+            return items
+
         for page_num in range(start_page, start_page + max_pages):
             if not self._running or job.status == JobStatus.CANCELLED:
                 break
-            
+
             try:
-                if pagination.type == "next_button":
-                    # Click next button multiple times
-                    next_items = await self._scrape_paginated_pages(job, pagination, progress_callback)
-                    items.extend(next_items)
-                elif pagination.type == "page_number":
-                    # Construct page URL
-                    page_url = self._construct_page_url(url, page_num)
-                    page_items = await self._scrape_url(job, page_url, progress_callback)
-                    items.extend(page_items)
-                    
+                # Construct page URL
+                page_url = self._construct_page_url(url, page_num)
+                page_items = await self._scrape_url(job, page_url, progress_callback)
+                items.extend((page_url, item) for item in page_items)
+
             except Exception as e:
                 logger.debug(f"Pagination error on page {page_num}: {e}")
                 break
@@ -333,18 +374,30 @@ class ScraperEngine:
         else:
             return f"{base_url}?page={page_num}"
 
-    async def _scrape_paginated_pages(self, job: Job, pagination, progress_callback: Optional[Callable] = None) -> List[Dict[str, Any]]:
+    async def _scrape_paginated_pages(
+        self,
+        job: Job,
+        pagination,
+        progress_callback: Optional[Callable] = None,
+        start_url: Optional[str] = None
+    ) -> List[Tuple[str, Dict[str, Any]]]:
         """Scrape multiple pages by clicking next button"""
         items = []
 
         from app.scraper.playwright_service import playwright_service
 
-        await playwright_service.initialize()
-
-        browser = await playwright_service.launch_browser(
-            headless=job.config.browser.headless,
-            user_agent=job.config.browser.user_agent
-        )
+        try:
+            await playwright_service.initialize()
+            browser = await playwright_service.launch_browser(
+                headless=job.config.browser.headless,
+                user_agent=job.config.browser.user_agent
+            )
+        except RuntimeError as e:
+            message = str(e).lower()
+            if "browser binaries are not installed" in message or "executable doesn't exist" in message:
+                page_items = await self._scrape_with_requests(job, start_url or job.config.url)
+                return [(start_url or job.config.url, item) for item in page_items]
+            raise
 
         context = await playwright_service.create_context(
             browser,
@@ -356,7 +409,8 @@ class ScraperEngine:
 
         try:
             # Go to initial URL
-            await page.goto(job.config.url, wait_until="networkidle", timeout=30000)
+            await page.goto(start_url or job.config.url, wait_until="networkidle", timeout=30000)
+            current_url = page.url
 
             for page_num in range(pagination.max_pages):
                 if not self._running:
@@ -367,9 +421,10 @@ class ScraperEngine:
                     await asyncio.sleep(job.config.browser.delay_ms / 1000)
 
                 # Scrape current page
+                current_url = page.url
                 content = await page.content()
-                page_items = self._parse_content(job, content)
-                items.extend(page_items)
+                page_items = self._parse_content(job, content, current_url)
+                items.extend((current_url, item) for item in page_items)
 
                 # Try to click next button
                 try:

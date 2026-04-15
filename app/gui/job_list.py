@@ -36,46 +36,58 @@ class JobListView(ctk.CTkFrame):
     def _create_header(self):
         """Create header"""
         header_frame = ctk.CTkFrame(self)
-        header_frame.grid(row=0, column=0, sticky="ew", padx=20, pady=20)
-        
-        # Title
+        header_frame.grid(row=0, column=0, sticky="ew", padx=24, pady=(20, 12))
+
         title = ctk.CTkLabel(
             header_frame,
             text="My Jobs",
             font=ctk.CTkFont(size=24, weight="bold")
         )
-        title.pack(side="left", padx=20)
-        
-        # New job button
-        ctk.CTkButton(
+        title.pack(side="left", padx=(20, 16))
+
+        self.summary_label = ctk.CTkLabel(
             header_frame,
-            text="➕ New Job",
-            command=self._new_job
-        ).pack(side="right", padx=20)
-                # Source selector
-        ctk.CTkLabel(header_frame, text="Quick Run:").pack(side="left", padx=(40, 10))
-        
+            text="",
+            font=ctk.CTkFont(size=12),
+            text_color=("gray40", "gray70")
+        )
+        self.summary_label.pack(side="left", padx=8)
+
+        ctk.CTkLabel(header_frame, text="Quick Run:").pack(side="left", padx=(30, 8))
+
         self.source_var = ctk.StringVar(value="")
         self.source_combo = ctk.CTkComboBox(
             header_frame,
             values=self._get_source_options(),
             variable=self.source_var,
-            width=200
+            width=280
         )
-        self.source_combo.pack(side="left", padx=10)
-        
-        # Run from source
+        self.source_combo.pack(side="left", padx=8)
+
         ctk.CTkButton(
             header_frame,
             text="▶ Run Source",
-            command=self._run_from_source
-        ).pack(side="left", padx=10)
-                # Refresh button
+            command=self._run_from_source,
+            width=100,
+            height=32
+        ).pack(side="left", padx=8)
+
         ctk.CTkButton(
             header_frame,
-            text="🔄 Refresh",
-            command=self._load_jobs
-        ).pack(side="right", padx=10)
+            text="Refresh",
+            command=self._load_jobs,
+            width=90,
+            height=32
+        ).pack(side="right", padx=8)
+
+        ctk.CTkButton(
+            header_frame,
+            text="+ New Job",
+            command=self._new_job,
+            width=110,
+            height=32,
+            fg_color=("#2563eb", "#3b82f6")
+        ).pack(side="right", padx=8)
     
     def _get_source_options(self):
         """Get source options for combo"""

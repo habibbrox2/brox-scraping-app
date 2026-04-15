@@ -18,31 +18,24 @@ class DashboardView(ctk.CTkFrame):
     def __init__(self, parent):
         super().__init__(parent)
 
-        # Configure grid
         self.grid_columnconfigure((0, 1, 2), weight=1)
         self.grid_rowconfigure(1, weight=1)
 
-        # Stat card value labels
         self.stat_value_labels = []
         
-        # Create header
         header = ctk.CTkLabel(
             self,
             text="Dashboard",
-            font=ctk.CTkFont(size=28, weight="bold")
+            font=ctk.CTkFont(size=26, weight="bold")
         )
-        header.grid(row=0, column=0, columnspan=3, padx=30, pady=(30, 10), sticky="w")
+        header.grid(row=0, column=0, columnspan=3, padx=24, pady=(24, 8), sticky="w")
         
-        # Initialize stats
         self.stats = {"total_jobs": 0, "items_today": 0, "success_rate": 0.0}
 
-        # Create stat cards (will be updated when stats load)
         self._create_stat_cards()
 
-        # Create recent activity
         self._create_recent_activity()
 
-        # Load stats in background
         self._load_stats_async()
         
         logger.debug("Dashboard view created")
@@ -74,112 +67,117 @@ class DashboardView(ctk.CTkFrame):
                 "title": "Total Jobs",
                 "value": str(self.stats.get("total_jobs", 0)),
                 "icon": "📋",
-                "color": "#3498db"
+                "color": "#3b82f6"
             },
             {
                 "title": "Items Today",
                 "value": str(self.stats.get("items_today", 0)),
                 "icon": "📦",
-                "color": "#2ecc71"
+                "color": "#10b981"
             },
             {
                 "title": "Success Rate",
                 "value": f"{self.stats.get('success_rate', 0):.1f}%",
                 "icon": "✅",
-                "color": "#9b59b6"
+                "color": "#8b5cf6"
             },
         ]
 
         for idx, card in enumerate(cards_data):
             if idx < len(self.stat_value_labels):
-                # Update existing label
                 self.stat_value_labels[idx].configure(text=card["value"])
             else:
-                # Create new card
-                card_frame = ctk.CTkFrame(self, fg_color=("gray85", "gray17"))
-                card_frame.grid(row=1, column=idx, padx=20, pady=20, sticky="nsew")
+                card_frame = ctk.CTkFrame(self, fg_color=("gray85", "gray17"), corner_radius=12)
+                card_frame.grid(row=1, column=idx, padx=16, pady=16, sticky="nsew")
 
-                # Icon
                 icon_label = ctk.CTkLabel(
                     card_frame,
                     text=card["icon"],
-                    font=ctk.CTkFont(size=40)
+                    font=ctk.CTkFont(size=36)
                 )
-                icon_label.pack(pady=(20, 10))
+                icon_label.pack(pady=(24, 8))
 
-                # Value
                 value_label = ctk.CTkLabel(
                     card_frame,
                     text=card["value"],
-                    font=ctk.CTkFont(size=32, weight="bold")
+                    font=ctk.CTkFont(size=28, weight="bold")
                 )
-                value_label.pack(pady=5)
+                value_label.pack(pady=4)
                 self.stat_value_labels.append(value_label)
 
-                # Title
                 title_label = ctk.CTkLabel(
                     card_frame,
                     text=card["title"],
-                    font=ctk.CTkFont(size=14),
-                    text_color="gray"
+                    font=ctk.CTkFont(size=13),
+                    text_color=("gray50", "gray50")
                 )
-                title_label.pack(pady=(0, 20))
+                title_label.pack(pady=(0, 16))
     
     def _create_recent_activity(self):
         """Create recent activity section"""
-        activity_frame = ctk.CTkFrame(self, fg_color=("gray85", "gray17"))
-        activity_frame.grid(row=2, column=0, columnspan=3, padx=20, pady=20, sticky="nsew")
+        activity_frame = ctk.CTkFrame(self, fg_color=("gray85", "gray17"), corner_radius=12)
+        activity_frame.grid(row=2, column=0, columnspan=3, padx=16, pady=16, sticky="nsew")
         
-        # Title
         title = ctk.CTkLabel(
             activity_frame,
             text="Recent Jobs",
-            font=ctk.CTkFont(size=18, weight="bold")
+            font=ctk.CTkFont(size=16, weight="bold")
         )
-        title.pack(pady=(20, 10), padx=20, anchor="w")
+        title.pack(pady=(16, 8), padx=20, anchor="w")
         
-        # Get recent jobs
         jobs = db.get_all_jobs()[:5]
         
         if not jobs:
-            no_jobs_label = ctk.CTkLabel(
-                activity_frame,
-                text="No jobs yet. Create your first scraping job!",
-                font=ctk.CTkFont(size=14),
-                text_color="gray"
-            )
-            no_jobs_label.pack(pady=40)
+            empty_frame = ctk.CTkFrame(activity_frame, fg_color="transparent")
+            empty_frame.pack(fill="both", expand=True, pady=24)
+            
+            ctk.CTkLabel(
+                empty_frame,
+                text="📭",
+                font=ctk.CTkFont(size=32)
+            ).pack(pady=(0, 8))
+            
+            ctk.CTkLabel(
+                empty_frame,
+                text="No jobs yet",
+                font=ctk.CTkFont(size=14, weight="bold"),
+            ).pack(pady=(0, 4))
+            
+            ctk.CTkLabel(
+                empty_frame,
+                text="Create your first scraping job to get started",
+                font=ctk.CTkFont(size=12),
+                text_color=("gray50", "gray60"),
+            ).pack()
         else:
-            # Jobs list
             for job in jobs:
                 job_frame = ctk.CTkFrame(activity_frame, fg_color="transparent")
-                job_frame.pack(fill="x", padx=20, pady=5)
+                job_frame.pack(fill="x", padx=16, pady=4)
                 
-                # Job name
                 name_label = ctk.CTkLabel(
                     job_frame,
                     text=job.name,
-                    font=ctk.CTkFont(size=14, weight="bold"),
+                    font=ctk.CTkFont(size=13, weight="bold"),
                     anchor="w"
                 )
-                name_label.pack(side="left", pady=10)
+                name_label.pack(side="left", pady=8)
                 
-                # Status
                 status_label = ctk.CTkLabel(
                     job_frame,
                     text=f"Status: {job.status.value}",
-                    font=ctk.CTkFont(size=12),
-                    text_color="gray"
+                    font=ctk.CTkFont(size=11),
+                    text_color=("gray50", "gray60")
                 )
-                status_label.pack(side="right", padx=10)
+                status_label.pack(side="right", padx=12, pady=8)
         
-        # View all button
         view_btn = ctk.CTkButton(
             activity_frame,
             text="View All Jobs",
-            command=lambda: self.master.master.navigate_to("my_jobs")
+            command=lambda: self.master.master.navigate_to("my_jobs"),
+            width=120,
+            height=32
         )
-        view_btn.pack(pady=20)
+        view_btn.pack(pady=16)
 
 
 def refresh_dashboard():

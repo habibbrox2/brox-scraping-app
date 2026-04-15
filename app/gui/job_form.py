@@ -34,80 +34,80 @@ class JobFormView(ctk.CTkFrame):
         self._create_form()
         
         logger.debug(f"Job form view created for: {job.name if job else 'new job'}")
-    
+
+    def _create_input_field(self, parent, label: str, default: str = "") -> ctk.CTkEntry:
+        """Create input field"""
+        field_frame = ctk.CTkFrame(parent, fg_color="transparent")
+        field_frame.pack(fill="x", padx=16, pady=(0, 8))
+
+        ctk.CTkLabel(
+            field_frame,
+            text=label,
+            width=170,
+            anchor="w",
+            font=ctk.CTkFont(size=12)
+        ).pack(side="left", pady=8)
+
+        entry = ctk.CTkEntry(field_frame, height=32)
+        entry.insert(0, default)
+        entry.pack(side="right", fill="x", expand=True, pady=8)
+
+        return entry
+
     def _create_form(self):
         """Create job form"""
-        # Scrollable frame
-        scrollable = ctk.CTkScrollableFrame(self, label_text="Job Configuration")
+        scrollable = ctk.CTkScrollableFrame(self, label_text="Job Configuration", padx=8, pady=8)
         scrollable.pack(fill="both", expand=True, padx=20, pady=20)
         
-        # Basic info section
-        basic_frame = ctk.CTkFrame(scrollable)
-        basic_frame.pack(fill="x", pady=10)
+        def create_section(parent, title):
+            section = ctk.CTkFrame(parent, fg_color=("gray90", "gray17"), corner_radius=8)
+            section.pack(fill="x", pady=(0, 12))
+            
+            ctk.CTkLabel(
+                section,
+                text=title,
+                font=ctk.CTkFont(size=15, weight="bold")
+            ).pack(pady=(12, 8), padx=16, anchor="w")
+            
+            return section
         
-        ctk.CTkLabel(
-            basic_frame,
-            text="Basic Information",
-            font=ctk.CTkFont(size=16, weight="bold")
-        ).pack(pady=10, padx=20, anchor="w")
+        basic_frame = create_section(scrollable, "Basic Information")
         
-        # Job name
         self.name_entry = self._create_input_field(
             basic_frame,
             "Job Name:",
             self.job.name if self.job else ""
         )
         
-        # Description
         self.desc_entry = self._create_input_field(
             basic_frame,
             "Description:",
             self.job.description if self.job else ""
         )
         
-        # URL section
-        url_frame = ctk.CTkFrame(scrollable)
-        url_frame.pack(fill="x", pady=10)
+        url_frame = create_section(scrollable, "Target URLs")
         
-        ctk.CTkLabel(
-            url_frame,
-            text="Target URLs",
-            font=ctk.CTkFont(size=16, weight="bold")
-        ).pack(pady=10, padx=20, anchor="w")
-        
-        # Primary URL
         self.url_entry = self._create_input_field(
             url_frame,
             "URL:",
             self.job.config.url if self.job and self.job.config.url else ""
         )
         
-        # Additional URLs (comma-separated)
         self.urls_entry = self._create_input_field(
             url_frame,
             "Additional URLs (comma-separated):",
             ",".join(self.job.config.urls) if self.job and self.job.config.urls else ""
         )
         
-        # Fields section
-        fields_frame = ctk.CTkFrame(scrollable)
-        fields_frame.pack(fill="x", pady=10)
+        fields_frame = create_section(scrollable, "Data Fields")
         
-        ctk.CTkLabel(
-            fields_frame,
-            text="Data Fields",
-            font=ctk.CTkFont(size=16, weight="bold")
-        ).pack(pady=10, padx=20, anchor="w")
-        
-        # JSON Schema editor
         self.fields_text = ctk.CTkTextbox(
             fields_frame,
-            height=200,
-            font=ctk.CTkFont(family="Courier", size=12)
+            height=180,
+            font=ctk.CTkFont(family="Courier", size=11)
         )
-        self.fields_text.pack(fill="x", padx=20, pady=10)
+        self.fields_text.pack(fill="x", padx=16, pady=(0, 8))
         
-        # Default fields
         default_fields = [
             {"name": "title", "selector": "h3", "selector_type": "css", "attribute": "text"},
             {"name": "price", "selector": ".price", "selector_type": "css", "attribute": "text"},
@@ -119,54 +119,34 @@ class JobFormView(ctk.CTkFrame):
         
         self.fields_text.insert("1.0", json.dumps(default_fields, indent=2))
         
-        # Root selector
         self.root_selector_entry = self._create_input_field(
             fields_frame,
             "Root Element Selector:",
             self.job.config.root_selector if self.job else ""
         )
         
-        # Browser settings section
-        browser_frame = ctk.CTkFrame(scrollable)
-        browser_frame.pack(fill="x", pady=10)
+        browser_frame = create_section(scrollable, "Browser Settings")
         
-        ctk.CTkLabel(
-            browser_frame,
-            text="Browser Settings",
-            font=ctk.CTkFont(size=16, weight="bold")
-        ).pack(pady=10, padx=20, anchor="w")
-        
-        # Headless mode
         self.headless_var = ctk.BooleanVar(value=self.job.config.browser.headless if self.job else True)
         ctk.CTkCheckBox(
             browser_frame,
             text="Headless Mode (no visible browser)",
             variable=self.headless_var
-        ).pack(pady=5, padx=20, anchor="w")
+        ).pack(pady=4, padx=16, anchor="w")
         
-        # Delay
         self.delay_entry = self._create_input_field(
             browser_frame,
             "Delay (ms):",
             str(self.job.config.browser.delay_ms if self.job else 1000)
         )
         
-        # User Agent
         self.ua_entry = self._create_input_field(
             browser_frame,
             "Custom User-Agent:",
             self.job.config.browser.user_agent if self.job and self.job.config.browser.user_agent else ""
         )
         
-        # Pagination section
-        pagination_frame = ctk.CTkFrame(scrollable)
-        pagination_frame.pack(fill="x", pady=10)
-        
-        ctk.CTkLabel(
-            pagination_frame,
-            text="Pagination",
-            font=ctk.CTkFont(size=16, weight="bold")
-        ).pack(pady=10, padx=20, anchor="w")
+        pagination_frame = create_section(scrollable, "Pagination")
         
         self.pagination_enabled_var = ctk.BooleanVar(
             value=self.job.config.pagination.enabled if self.job else False
@@ -175,7 +155,7 @@ class JobFormView(ctk.CTkFrame):
             pagination_frame,
             text="Enable Pagination",
             variable=self.pagination_enabled_var
-        ).pack(pady=5, padx=20, anchor="w")
+        ).pack(pady=4, padx=16, anchor="w")
         
         self.max_pages_entry = self._create_input_field(
             pagination_frame,
@@ -183,15 +163,7 @@ class JobFormView(ctk.CTkFrame):
             str(self.job.config.pagination.max_pages if self.job else 10)
         )
         
-        # Schedule section
-        schedule_frame = ctk.CTkFrame(scrollable)
-        schedule_frame.pack(fill="x", pady=10)
-        
-        ctk.CTkLabel(
-            schedule_frame,
-            text="Scheduling",
-            font=ctk.CTkFont(size=16, weight="bold")
-        ).pack(pady=10, padx=20, anchor="w")
+        schedule_frame = create_section(scrollable, "Scheduling")
         
         self.schedule_enabled_var = ctk.BooleanVar(
             value=self.job.config.schedule.enabled if self.job and hasattr(self.job.config, 'schedule') else False
@@ -200,7 +172,7 @@ class JobFormView(ctk.CTkFrame):
             schedule_frame,
             text="Enable Scheduled Runs",
             variable=self.schedule_enabled_var
-        ).pack(pady=5, padx=20, anchor="w")
+        ).pack(pady=4, padx=16, anchor="w")
         
         self.interval_entry = self._create_input_field(
             schedule_frame,
@@ -208,41 +180,27 @@ class JobFormView(ctk.CTkFrame):
             str(self.job.config.schedule.interval_minutes if self.job and self.job.config.schedule.interval_minutes is not None else 60)
         )
         
-        # Buttons
-        button_frame = ctk.CTkFrame(self)
-        button_frame.pack(fill="x", padx=20, pady=20)
+        button_frame = ctk.CTkFrame(self, fg_color="transparent")
+        button_frame.pack(fill="x", padx=20, pady=(12, 20))
         
         ctk.CTkButton(
             button_frame,
             text="Cancel",
             command=self._cancel,
-            fg_color="gray"
-        ).pack(side="right", padx=10)
+            width=110,
+            height=36,
+            fg_color=("gray70", "gray40"),
+        ).pack(side="right", padx=8)
         
         ctk.CTkButton(
             button_frame,
             text="Save Job",
-            command=self._save
-        ).pack(side="right", padx=10)
-    
-    def _create_input_field(self, parent, label: str, default: str = "") -> ctk.CTkEntry:
-        """Create input field"""
-        frame = ctk.CTkFrame(parent, fg_color="transparent")
-        frame.pack(fill="x", padx=20, pady=5)
-        
-        ctk.CTkLabel(
-            frame,
-            text=label,
-            width=180,
-            anchor="w"
-        ).pack(side="left", pady=10)
-        
-        entry = ctk.CTkEntry(frame)
-        entry.insert(0, default)
-        entry.pack(side="right", fill="x", expand=True, pady=10)
-        
-        return entry
-    
+            command=self._save,
+            width=110,
+            height=36,
+            fg_color=("#2563eb", "#3b82f6"),
+        ).pack(side="right", padx=8)
+
     def _validate(self) -> bool:
         """Validate form inputs"""
         errors = []
@@ -331,7 +289,7 @@ class JobFormView(ctk.CTkFrame):
                 ),
                 schedule=ScheduleConfig(
                     enabled=self.schedule_enabled_var.get(),
-                    interval_minutes=int(self.interval_entry.get() or "60")
+                    interval_minutes=int(self.interval_entry.get() or "60") if self.schedule_enabled_var.get() else None
                 )
             )
             
@@ -356,8 +314,15 @@ class JobFormView(ctk.CTkFrame):
             # Handle scheduling
             if job.config.schedule.enabled and job.config.schedule.interval_minutes:
                 job_scheduler.schedule_job(job.id, interval_minutes=job.config.schedule.interval_minutes)
+                job.status = JobStatus.SCHEDULED if job.status != JobStatus.RUNNING else job.status
+                job.next_run_at = datetime.now()
+                db.update_job(job)
             else:
                 job_scheduler.unschedule_job(job.id)
+                if job.status == JobStatus.SCHEDULED:
+                    job.status = JobStatus.DRAFT
+                job.next_run_at = None
+                db.update_job(job)
             
             # Navigate to jobs list
             self.master.master.navigate_to("my_jobs")
