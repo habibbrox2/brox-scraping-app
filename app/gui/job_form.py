@@ -6,9 +6,10 @@ import customtkinter as ctk
 from tkinter import messagebox
 import json
 import re
+from datetime import datetime
 
 from app.database.models import (
-    Job, JobConfig, FieldConfig, PaginationConfig, ProxyConfig, BrowserConfig, ScheduleConfig
+    Job, JobConfig, FieldConfig, PaginationConfig, ProxyConfig, BrowserConfig, ScheduleConfig, JobStatus
 )
 from app.database import db
 from app.utils.helpers import generate_unique_id
@@ -204,7 +205,7 @@ class JobFormView(ctk.CTkFrame):
         self.interval_entry = self._create_input_field(
             schedule_frame,
             "Interval (minutes):",
-            str(self.job.config.schedule.interval_minutes if self.job and hasattr(self.job.config, 'schedule') else 60)
+            str(self.job.config.schedule.interval_minutes if self.job and self.job.config.schedule.interval_minutes is not None else 60)
         )
         
         # Buttons
@@ -340,9 +341,9 @@ class JobFormView(ctk.CTkFrame):
                 name=self.name_entry.get(),
                 description=self.desc_entry.get(),
                 config=config,
-                status=self.job.status if self.job else db.models.JobStatus.DRAFT,
-                created_at=self.job.created_at if self.job else None,
-                updated_at=None
+                status=self.job.status if self.job else JobStatus.DRAFT,
+                created_at=self.job.created_at if self.job else datetime.now(),
+                updated_at=datetime.now()
             )
             
             if self.job:
@@ -353,7 +354,7 @@ class JobFormView(ctk.CTkFrame):
                 messagebox.showinfo("Success", "Job created successfully!")
             
             # Handle scheduling
-            if job.config.schedule.enabled:
+            if job.config.schedule.enabled and job.config.schedule.interval_minutes:
                 job_scheduler.schedule_job(job.id, interval_minutes=job.config.schedule.interval_minutes)
             else:
                 job_scheduler.unschedule_job(job.id)

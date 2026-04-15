@@ -5,7 +5,7 @@ Templates view for ScrapMaster Desktop
 import customtkinter as ctk
 from tkinter import messagebox
 
-from app.database.models import Template, JobConfig, FieldConfig
+from app.database.models import Template, JobConfig, FieldConfig, Job, JobStatus
 from app.database import db
 from app.utils.helpers import generate_unique_id
 from app.utils.logger import get_logger
@@ -130,12 +130,13 @@ class TemplatesView(ctk.CTkFrame):
         from app.gui.job_form import JobFormView
         
         # Create job from template
-        job = db.models.Job(
+        job = Job(
             id=generate_unique_id(),
             name=f"{template.name} - Copy",
             description=template.description,
             template=template.id,
-            config=template.config
+            config=template.config,
+            status=JobStatus.DRAFT
         )
         
         db.create_job(job)

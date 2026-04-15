@@ -6,7 +6,7 @@ import customtkinter as ctk
 from tkinter import messagebox, filedialog
 import os
 
-from app.database.models import Settings, WebScrapingSource
+from app.database.models import Settings
 from app.database import db
 from app.utils.logger import get_logger
 
@@ -150,31 +150,7 @@ class SettingsView(ctk.CTkFrame):
             variable=self.log_level_var
         )
         log_combo.pack(pady=10, padx=20, anchor="w")
-        
-        # Web Scraping Sources
-        sources_frame = ctk.CTkFrame(scrollable)
-        sources_frame.pack(fill="x", pady=10)
-        
-        ctk.CTkLabel(
-            sources_frame,
-            text="Web Scraping Sources",
-            font=ctk.CTkFont(size=16, weight="bold")
-        ).pack(pady=10, padx=20, anchor="w")
-        
-        # Sources list
-        self.sources_list = ctk.CTkScrollableFrame(sources_frame, height=200)
-        self.sources_list.pack(fill="x", padx=20, pady=10)
-        
-        # Load sources
-        self._load_sources()
-        
-        # Add source button
-        ctk.CTkButton(
-            sources_frame,
-            text="➕ Add Source",
-            command=self._add_source
-        ).pack(pady=10, padx=20, anchor="w")
-        
+
         # Save button
         button_frame = ctk.CTkFrame(scrollable)
         button_frame.pack(fill="x", pady=20)

@@ -4,6 +4,7 @@ Job list view for ScrapMaster Desktop
 
 import customtkinter as ctk
 from tkinter import messagebox
+import threading
 
 from app.database import db
 from app.database.models import Job, JobStatus
@@ -28,7 +29,7 @@ class JobListView(ctk.CTkFrame):
         
         # Load jobs
         self.jobs = []
-        self._load_jobs()
+        self._load_jobs_async()
         
         logger.debug("Job list view created")
     
@@ -132,14 +133,36 @@ class JobListView(ctk.CTkFrame):
         self.list_frame = ctk.CTkScrollableFrame(self, label_text="Jobs")
         self.list_frame.grid(row=1, column=0, sticky="nsew", padx=20, pady=(0, 20))
     
+    def _load_jobs_async(self):
+        """Load jobs from database in background"""
+        def load_jobs():
+            try:
+                jobs = db.get_all_jobs()
+                # Update on main thread
+                self.after(0, lambda: self._update_jobs(jobs))
+            except Exception as e:
+                logger.error(f"Failed to load jobs: {e}")
+                self.after(0, lambda: messagebox.showerror("Error", f"Failed to load jobs:\n{str(e)}"))
+                self.after(0, lambda: self._update_jobs([]))
+
+        thread = threading.Thread(target=load_jobs, daemon=True)
+        thread.start()
+
+    def _update_jobs(self, jobs):
+        """Update jobs on UI"""
+        self.jobs = jobs
+        self._refresh_jobs_ui()
+
     def _load_jobs(self):
-        """Load jobs from database"""
+        """Load jobs from database (legacy name for refresh)"""
+        self._refresh_jobs_ui()
+
+    def _refresh_jobs_ui(self):
+        """Refresh the jobs UI"""
         # Clear current list
         for widget in self.list_frame.winfo_children():
             widget.destroy()
-        
-        self.jobs = db.get_all_jobs()
-        
+
         if not self.jobs:
             empty_label = ctk.CTkLabel(
                 self.list_frame,
@@ -149,7 +172,7 @@ class JobListView(ctk.CTkFrame):
             )
             empty_label.pack(pady=40)
             return
-        
+
         # Create job cards
         for job in self.jobs:
             self._create_job_card(job)
@@ -275,10 +298,14 @@ class JobListView(ctk.CTkFrame):
     def _delete_job(self, job: Job):
         """Delete job"""
         if messagebox.askyesno("Delete Job", f"Delete job '{job.name}'?"):
-            db.delete_job(job.id)
-            db.delete_items_by_job(job.id)
-            self._load_jobs()
-            messagebox.showinfo("Success", "Job deleted!")
+            try:
+                db.delete_job(job.id)
+                db.delete_items_by_job(job.id)
+                self._load_jobs()
+                messagebox.showinfo("Success", "Job deleted!")
+            except Exception as e:
+                logger.error(f"Failed to delete job: {e}")
+                messagebox.showerror("Error", f"Failed to delete job:\n{str(e)}")
     
     def _run_job(self, job: Job):
         """Run job"""

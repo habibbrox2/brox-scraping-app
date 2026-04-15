@@ -146,7 +146,7 @@ class ScraperEngine:
     async def _scrape_url(self, job: Job, url: str, progress_callback: Optional[Callable] = None) -> List[Dict[str, Any]]:
         """Scrape a single URL"""
         items = []
-        
+
         # Try Playwright first, fallback to requests
         try:
             if not job.config.browser.headless:
@@ -154,11 +154,11 @@ class ScraperEngine:
                 items = await self._scrape_with_playwright(job, url)
             else:
                 # Use requests for static content
-                items = self._scrape_with_requests(job, url)
+                items = await self._scrape_with_requests(job, url)
         except Exception as e:
             logger.warning(f"Playwright failed, falling back to requests: {e}")
-            items = self._scrape_with_requests(job, url)
-        
+            items = await self._scrape_with_requests(job, url)
+
         return items
     
     async def _scrape_with_playwright(self, job: Job, url: str) -> List[Dict[str, Any]]:
@@ -202,17 +202,18 @@ class ScraperEngine:
         
         return items
     
-    def _scrape_with_requests(self, job: Job, url: str) -> List[Dict[str, Any]]:
+    async def _scrape_with_requests(self, job: Job, url: str) -> List[Dict[str, Any]]:
         """Scrape using requests + BeautifulSoup"""
         items = []
-        
+
         headers = {"User-Agent": job.config.browser.user_agent or "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"}
-        
-        response = requests.get(url, headers=headers, timeout=30)
+
+        loop = asyncio.get_event_loop()
+        response = await loop.run_in_executor(self._executor, lambda: requests.get(url, headers=headers, timeout=30))
         response.raise_for_status()
-        
+
         items = self._parse_content(job, response.text)
-        
+
         return items
     
     def _parse_content(self, job: Job, content: str) -> List[Dict[str, Any]]:
@@ -310,8 +311,9 @@ class ScraperEngine:
             
             try:
                 if pagination.type == "next_button":
-                    # Click next button and scrape
-                    pass  # Would need Playwright for this
+                    # Click next button multiple times
+                    next_items = await self._scrape_paginated_pages(job, pagination, progress_callback)
+                    items.extend(next_items)
                 elif pagination.type == "page_number":
                     # Construct page URL
                     page_url = self._construct_page_url(url, page_num)
@@ -330,14 +332,72 @@ class ScraperEngine:
             return f"{base_url}&page={page_num}"
         else:
             return f"{base_url}?page={page_num}"
+
+    async def _scrape_paginated_pages(self, job: Job, pagination, progress_callback: Optional[Callable] = None) -> List[Dict[str, Any]]:
+        """Scrape multiple pages by clicking next button"""
+        items = []
+
+        from app.scraper.playwright_service import playwright_service
+
+        await playwright_service.initialize()
+
+        browser = await playwright_service.launch_browser(
+            headless=job.config.browser.headless,
+            user_agent=job.config.browser.user_agent
+        )
+
+        context = await playwright_service.create_context(
+            browser,
+            viewport=(job.config.browser.viewport_width, job.config.browser.viewport_height),
+            user_agent=job.config.browser.user_agent
+        )
+
+        page = await context.new_page()
+
+        try:
+            # Go to initial URL
+            await page.goto(job.config.url, wait_until="networkidle", timeout=30000)
+
+            for page_num in range(pagination.max_pages):
+                if not self._running:
+                    break
+
+                # Apply delay
+                if job.config.browser.delay_ms > 0:
+                    await asyncio.sleep(job.config.browser.delay_ms / 1000)
+
+                # Scrape current page
+                content = await page.content()
+                page_items = self._parse_content(job, content)
+                items.extend(page_items)
+
+                # Try to click next button
+                try:
+                    next_button = page.locator(pagination.selector).first
+                    if await next_button.is_visible(timeout=5000):
+                        await next_button.click()
+                        await page.wait_for_load_state("networkidle", timeout=30000)
+                    else:
+                        logger.debug("Next button not found or not visible")
+                        break
+                except Exception as e:
+                    logger.debug(f"Pagination click failed: {e}")
+                    break
+
+        finally:
+            await page.close()
+            await context.close()
+            await browser.close()
+
+        return items
     
     async def _post_items_to_api(self, job: Job, items: List[Dict[str, Any]]):
         """Post scraped items to configured API endpoint"""
         api_config = job.config.api
-        
+
         # Prepare headers
         headers = api_config.headers.copy()
-        
+
         # Add authentication
         if api_config.auth_type == "bearer" and api_config.auth_token:
             headers["Authorization"] = f"Bearer {api_config.auth_token}"
@@ -347,26 +407,27 @@ class ScraperEngine:
             headers["Authorization"] = f"Basic {auth_string}"
         elif api_config.auth_type == "api_key" and api_config.auth_token:
             headers[api_config.api_key_header] = api_config.auth_token
-        
+
         # Post each item
+        loop = asyncio.get_event_loop()
         for item in items:
             try:
                 if api_config.method.upper() == "GET":
                     # For GET, send data as query parameters
-                    response = requests.get(api_config.url, headers=headers, params=item, timeout=30)
+                    response = await loop.run_in_executor(self._executor, lambda: requests.get(api_config.url, headers=headers, params=item, timeout=30))
                 else:
                     # For POST/PUT/PATCH, send data as JSON body
-                    response = requests.request(
-                        api_config.method.upper(), 
-                        api_config.url, 
-                        headers=headers, 
-                        json=item, 
+                    response = await loop.run_in_executor(self._executor, lambda: requests.request(
+                        api_config.method.upper(),
+                        api_config.url,
+                        headers=headers,
+                        json=item,
                         timeout=30
-                    )
-                
+                    ))
+
                 response.raise_for_status()
                 logger.debug(f"Successfully posted item to API: {response.status_code}")
-                
+
             except requests.exceptions.RequestException as e:
                 logger.error(f"Failed to post item to API: {e}")
                 raise

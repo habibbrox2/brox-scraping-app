@@ -5,12 +5,14 @@ SQLite database handling for ScrapMaster Desktop
 import os
 import sqlite3
 import json
+from pathlib import Path
 from datetime import datetime
 from typing import Optional, List, Dict, Any
 from contextlib import contextmanager
 
 from sqlalchemy import create_engine, text
 from sqlalchemy.pool import StaticPool
+import keyring
 
 from app.database.models import (
     Job, JobStatus, ScrapedItem, JobResult, Settings, Template, WebScrapingSource,
@@ -22,18 +24,21 @@ from app.utils.logger import get_logger
 logger = get_logger()
 
 # Database path
-DB_PATH = os.path.join(os.path.dirname(os.path.dirname(__file__)), "data", "scrapmaster.db")
+REPO_ROOT = Path(__file__).resolve().parents[2]
+DB_DIR = REPO_ROOT / "data"
+DB_DIR.mkdir(parents=True, exist_ok=True)
+DB_PATH = DB_DIR / "scrapmaster.db"
 
 # SQLAlchemy engine with connection pooling
 engine = create_engine(
-    f"sqlite:///{DB_PATH}",
+    f"sqlite:///{DB_PATH.as_posix()}",
     poolclass=StaticPool,  # Single connection for SQLite
     connect_args={"check_same_thread": False}  # Allow multi-thread access
 )
 
 def get_connection():
     """Get database connection"""
-    os.makedirs(os.path.dirname(DB_PATH), exist_ok=True)
+    DB_DIR.mkdir(parents=True, exist_ok=True)
     return engine.connect()
 
 @contextmanager
@@ -152,25 +157,27 @@ def create_job(job: Job) -> Job:
     """Create a new job"""
     with get_session() as conn:
         conn.execute(text("""
-            INSERT INTO jobs (id, name, description, template, config, status, 
+            INSERT INTO jobs (id, name, description, template, config, status,
                            created_at, updated_at, last_run_at, next_run_at,
                            run_count, success_count, failure_count)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-        """), (
-            job.id, job.name, job.description, job.template,
-            job.config.model_dump_json(), job.status.value,
-            job.created_at.isoformat(), job.updated_at.isoformat(),
-            job.last_run_at.isoformat() if job.last_run_at else None,
-            job.next_run_at.isoformat() if job.next_run_at else None,
-            job.run_count, job.success_count, job.failure_count
-        ))
+            VALUES (:id, :name, :description, :template, :config, :status,
+                   :created_at, :updated_at, :last_run_at, :next_run_at,
+                   :run_count, :success_count, :failure_count)
+        """), {
+            "id": job.id, "name": job.name, "description": job.description, "template": job.template,
+            "config": job.config.model_dump_json(), "status": job.status.value,
+            "created_at": job.created_at.isoformat(), "updated_at": job.updated_at.isoformat(),
+            "last_run_at": job.last_run_at.isoformat() if job.last_run_at else None,
+            "next_run_at": job.next_run_at.isoformat() if job.next_run_at else None,
+            "run_count": job.run_count, "success_count": job.success_count, "failure_count": job.failure_count
+        })
     logger.info(f"Created job: {job.name}")
     return job
 
 def get_job(job_id: str) -> Optional[Job]:
     """Get a job by ID"""
     with get_session() as conn:
-        cursor = conn.execute(text("SELECT * FROM jobs WHERE id = ?"), (job_id,))
+        cursor = conn.execute(text("SELECT * FROM jobs WHERE id = :job_id"), {"job_id": job_id})
         row = cursor.fetchone()
         if row:
             return _row_to_job(row)
@@ -185,7 +192,7 @@ def get_all_jobs() -> List[Job]:
 def get_jobs_by_status(status: JobStatus) -> List[Job]:
     """Get jobs by status"""
     with get_session() as conn:
-        cursor = conn.execute(text("SELECT * FROM jobs WHERE status = ? ORDER BY created_at DESC"), (status.value,))
+        cursor = conn.execute(text("SELECT * FROM jobs WHERE status = :status ORDER BY created_at DESC"), {"status": status.value})
         return [_row_to_job(row) for row in cursor.fetchall()]
 
 def update_job(job: Job) -> Job:
@@ -193,19 +200,19 @@ def update_job(job: Job) -> Job:
     job.updated_at = datetime.now()
     with get_session() as conn:
         conn.execute(text("""
-            UPDATE jobs SET name=?, description=?, template=?, config=?, status=?,
-                         updated_at=?, last_run_at=?, next_run_at=?, run_count=?,
-                         success_count=?, failure_count=?
-            WHERE id=?
-        """), (
-            job.name, job.description, job.template,
-            job.config.model_dump_json(), job.status.value,
-            job.updated_at.isoformat(),
-            job.last_run_at.isoformat() if job.last_run_at else None,
-            job.next_run_at.isoformat() if job.next_run_at else None,
-            job.run_count, job.success_count, job.failure_count,
-            job.id
-        ))
+            UPDATE jobs SET name=:name, description=:description, template=:template, config=:config, status=:status,
+                         updated_at=:updated_at, last_run_at=:last_run_at, next_run_at=:next_run_at, run_count=:run_count,
+                         success_count=:success_count, failure_count=:failure_count
+            WHERE id=:id
+        """), {
+            "name": job.name, "description": job.description, "template": job.template,
+            "config": job.config.model_dump_json(), "status": job.status.value,
+            "updated_at": job.updated_at.isoformat(),
+            "last_run_at": job.last_run_at.isoformat() if job.last_run_at else None,
+            "next_run_at": job.next_run_at.isoformat() if job.next_run_at else None,
+            "run_count": job.run_count, "success_count": job.success_count, "failure_count": job.failure_count,
+            "id": job.id
+        })
     logger.info(f"Updated job: {job.name}")
     return job
 
@@ -218,12 +225,24 @@ def delete_job(job_id: str) -> bool:
 
 def _row_to_job(row) -> Job:
     """Convert database row to Job model"""
+    try:
+        config = JobConfig.model_validate_json(row[4])
+    except Exception as e:
+        logger.error(f"Invalid job config for job {row[0]}: {e}")
+        # Try to fix the config
+        try:
+            config_dict = json.loads(row[4])
+            if 'url' in config_dict and (not config_dict['url'] or not config_dict['url'].strip()):
+                config_dict['url'] = "http://example.com"
+            config = JobConfig.model_validate(config_dict)
+        except Exception:
+            config = JobConfig(url="http://example.com", fields=[])
     return Job(
         id=row[0],
         name=row[1],
         description=row[2],
         template=row[3],
-        config=JobConfig.model_validate_json(row[4]),
+        config=config,
         status=JobStatus(row[5]),
         created_at=datetime.fromisoformat(row[6]),
         updated_at=datetime.fromisoformat(row[7]),
@@ -247,11 +266,24 @@ def create_item(item: ScrapedItem) -> ScrapedItem:
         })
     return item
 
-def get_items_by_job(job_id: str) -> List[ScrapedItem]:
-    """Get all items for a job"""
+def get_items_by_job(job_id: str, limit: int = None, offset: int = 0) -> List[ScrapedItem]:
+    """Get items for a job with pagination"""
     with get_session() as conn:
-        cursor = conn.execute(text("SELECT * FROM items WHERE job_id = ? ORDER BY created_at DESC"), (job_id,))
+        query = "SELECT * FROM items WHERE job_id = :job_id ORDER BY created_at DESC"
+        params = {"job_id": job_id}
+        if limit is not None:
+            query += " LIMIT :limit OFFSET :offset"
+            params["limit"] = limit
+            params["offset"] = offset
+        cursor = conn.execute(text(query), params)
         return [_row_to_item(row) for row in cursor.fetchall()]
+
+def get_items_count_by_job(job_id: str) -> int:
+    """Get total count of items for a job"""
+    with get_session() as conn:
+        cursor = conn.execute(text("SELECT COUNT(*) FROM items WHERE job_id = :job_id"), {"job_id": job_id})
+        row = cursor.fetchone()
+        return row[0] if row else 0
 
 def get_all_items() -> List[ScrapedItem]:
     """Get all scraped items"""
@@ -391,12 +423,24 @@ def delete_template(template_id: str) -> bool:
 
 def _row_to_template(row) -> Template:
     """Convert database row to Template model"""
+    try:
+        config = JobConfig.model_validate_json(row[4])
+    except Exception as e:
+        logger.error(f"Invalid template config for template {row[0]}: {e}")
+        # Try to fix the config
+        try:
+            config_dict = json.loads(row[4])
+            if 'url' in config_dict and (not config_dict['url'] or not config_dict['url'].strip()):
+                config_dict['url'] = "http://example.com"
+            config = JobConfig.model_validate(config_dict)
+        except Exception:
+            config = JobConfig(url="http://example.com", fields=[])
     return Template(
         id=row[0],
         name=row[1],
         description=row[2],
         category=row[3],
-        config=JobConfig.model_validate_json(row[4]),
+        config=config,
         icon=row[5],
         created_at=datetime.fromisoformat(row[6])
     )
@@ -452,17 +496,52 @@ def delete_source(source_id: str) -> bool:
 
 def _row_to_source(row) -> WebScrapingSource:
     """Convert database row to WebScrapingSource model"""
+    try:
+        config = JobConfig.model_validate_json(row[5])
+    except Exception as e:
+        logger.error(f"Invalid source config for source {row[0]}: {e}")
+        # Try to fix the config
+        try:
+            config_dict = json.loads(row[5])
+            if 'url' in config_dict and (not config_dict['url'] or not config_dict['url'].strip()):
+                config_dict['url'] = "http://example.com"
+            config = JobConfig.model_validate(config_dict)
+        except Exception:
+            config = JobConfig(url="http://example.com", fields=[])
     return WebScrapingSource(
         id=row[0],
         name=row[1],
         url=row[2],
         description=row[3],
         category=row[4],
-        config=JobConfig.model_validate_json(row[5]),
+        config=config,
         enabled=row[6],
         created_at=datetime.fromisoformat(row[7]),
         updated_at=datetime.fromisoformat(row[8])
     )
+
+# Secure storage using keyring
+def get_secure_value(service: str, username: str) -> Optional[str]:
+    """Get a secure value from keyring"""
+    try:
+        return keyring.get_password(service, username)
+    except Exception as e:
+        logger.warning(f"Failed to get secure value: {e}")
+        return None
+
+def set_secure_value(service: str, username: str, password: str):
+    """Set a secure value in keyring"""
+    try:
+        keyring.set_password(service, username, password)
+    except Exception as e:
+        logger.error(f"Failed to set secure value: {e}")
+
+def delete_secure_value(service: str, username: str):
+    """Delete a secure value from keyring"""
+    try:
+        keyring.delete_password(service, username)
+    except Exception as e:
+        logger.warning(f"Failed to delete secure value: {e}")
 
 # Statistics
 def get_stats() -> Dict[str, Any]:
@@ -470,30 +549,35 @@ def get_stats() -> Dict[str, Any]:
     with get_session() as conn:
         # Total jobs
         cursor = conn.execute(text("SELECT COUNT(*) as count FROM jobs"))
-        total_jobs = cursor.fetchone()[0]
-        
+        row = cursor.fetchone()
+        total_jobs = row[0] if row else 0
+
         # Jobs by status
         cursor = conn.execute(text("SELECT status, COUNT(*) as count FROM jobs GROUP BY status"))
         jobs_by_status = {row[0]: row[1] for row in cursor.fetchall()}
-        
+
         # Total items
         cursor = conn.execute(text("SELECT COUNT(*) as count FROM items"))
-        total_items = cursor.fetchone()[0]
-        
+        row = cursor.fetchone()
+        total_items = row[0] if row else 0
+
         # Items today
         today = datetime.now().date().isoformat()
-        cursor = conn.execute(text(f"SELECT COUNT(*) as count FROM items WHERE created_at LIKE '{today}%'"))
-        items_today = cursor.fetchone()[0]
-        
+        cursor = conn.execute(text("SELECT COUNT(*) as count FROM items WHERE created_at LIKE :today"), {"today": f"{today}%"})
+        row = cursor.fetchone()
+        items_today = row[0] if row else 0
+
         # Success rate
         cursor = conn.execute(text("SELECT SUM(success_count) as total FROM jobs"))
-        success_count = cursor.fetchone()[0] or 0
+        row = cursor.fetchone()
+        success_count = row[0] if row and row[0] else 0
         cursor = conn.execute(text("SELECT SUM(failure_count) as total FROM jobs"))
-        failure_count = cursor.fetchone()[0] or 0
-        
+        row = cursor.fetchone()
+        failure_count = row[0] if row and row[0] else 0
+
         total_runs = success_count + failure_count
         success_rate = (success_count / total_runs * 100) if total_runs > 0 else 0
-        
+
         return {
             "total_jobs": total_jobs,
             "jobs_by_status": jobs_by_status,

@@ -32,6 +32,8 @@ class AIChatPopup(ctk.CTkToplevel):
         self.title("AI Assistant")
         self.geometry("600x500")
         self.resizable(True, True)
+        self.attributes('-topmost', True)
+        self.lift()
         
         # Configure grid
         self.grid_columnconfigure(0, weight=1)

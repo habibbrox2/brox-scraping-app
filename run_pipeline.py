@@ -22,7 +22,7 @@ def get_sources():
     """Get all active sources"""
     conn = get_connection()
     conn.row_factory = sqlite3.Row
-    cursor = conn.execute("SELECT * FROM web_scraping_sources WHERE is_active = 1")
+    cursor = conn.execute("SELECT * FROM web_scraping_sources WHERE enabled = 1")
     sources = [dict(row) for row in cursor.fetchall()]
     conn.close()
     return sources

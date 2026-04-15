@@ -23,6 +23,9 @@ class ResultsView(ctk.CTkFrame):
         self.items = []
         self.filtered_items = []
         self.selected_job_id = None
+        self.current_page = 0
+        self.page_size = 50
+        self.total_items = 0
         
         # Configure grid
         self.grid_columnconfigure(0, weight=1)
@@ -108,11 +111,11 @@ class ResultsView(ctk.CTkFrame):
         table_frame.grid(row=2, column=0, sticky="nsew", padx=20, pady=(0, 20))
         table_frame.grid_columnconfigure(0, weight=1)
         table_frame.grid_rowconfigure(0, weight=1)
-        
+
         # Scrollable frame for table
         self.table = ctk.CTkScrollableFrame(table_frame, label_text="Data")
         self.table.grid(row=0, column=0, sticky="nsew")
-        
+
         # Results count
         self.count_label = ctk.CTkLabel(
             table_frame,
@@ -121,6 +124,33 @@ class ResultsView(ctk.CTkFrame):
             text_color="gray"
         )
         self.count_label.grid(row=1, column=0, pady=10)
+
+        # Pagination controls
+        pagination_frame = ctk.CTkFrame(table_frame, fg_color="transparent")
+        pagination_frame.grid(row=2, column=0, pady=10)
+
+        self.prev_button = ctk.CTkButton(
+            pagination_frame,
+            text="Previous",
+            command=self._prev_page,
+            width=80
+        )
+        self.prev_button.pack(side="left", padx=5)
+
+        self.page_label = ctk.CTkLabel(
+            pagination_frame,
+            text="Page 1 of 1",
+            font=ctk.CTkFont(size=12)
+        )
+        self.page_label.pack(side="left", padx=20)
+
+        self.next_button = ctk.CTkButton(
+            pagination_frame,
+            text="Next",
+            command=self._next_page,
+            width=80
+        )
+        self.next_button.pack(side="left", padx=5)
     
     def _get_job_options(self):
         """Get job filter options"""
@@ -131,24 +161,33 @@ class ResultsView(ctk.CTkFrame):
     
     def _load_results(self):
         """Load results"""
-        self.items = db.get_all_items()
+        job_name = self.job_var.get()
+        if job_name == "all":
+            self.items = db.get_all_items()
+        else:
+            job = db.get_job_by_name(job_name)
+            if job:
+                self.items = db.get_items_by_job(job.id)
+                self.total_items = len(self.items)
+            else:
+                self.items = []
+                self.total_items = 0
+        self.current_page = 0
         self._apply_filters()
     
     def _apply_filters(self):
         """Apply filters to items"""
         filtered = self.items
-        
-        # Job filter
-        job_name = self.job_var.get()
-        if job_name != "all":
-            job = db.get_job_by_name(job_name)
-            if job:
-                filtered = [item for item in filtered if item.job_id == job.id]
-        
+
         # Search filter
         search_text = self.search_entry.get().strip().lower()
         if search_text:
             filtered = [item for item in filtered if search_text in json.dumps(item.data).lower()]
+
+        self.filtered_items = filtered
+        self.current_page = 0
+        self._update_pagination()
+        self._display_page()
         
         self.filtered_items = filtered
         self._update_table()
@@ -373,3 +412,64 @@ class ResultsView(ctk.CTkFrame):
         except Exception as e:
             messagebox.showerror("Error", f"Export failed: {e}")
             logger.error(f"Export error: {e}")
+
+    def _update_pagination(self):
+        """Update pagination controls"""
+        total_pages = max(1, (len(self.filtered_items) + self.page_size - 1) // self.page_size)
+        self.page_label.configure(text=f"Page {self.current_page + 1} of {total_pages}")
+        self.prev_button.configure(state="normal" if self.current_page > 0 else "disabled")
+        self.next_button.configure(state="normal" if self.current_page < total_pages - 1 else "disabled")
+
+    def _display_page(self):
+        """Display current page of results"""
+        # Clear table
+        for widget in self.table.winfo_children():
+            widget.destroy()
+
+        start_idx = self.current_page * self.page_size
+        end_idx = start_idx + self.page_size
+        page_items = self.filtered_items[start_idx:end_idx]
+
+        # Update count
+        self.count_label.configure(text=f"{len(self.filtered_items)} items (showing {len(page_items)})")
+
+        if not page_items:
+            no_data_label = ctk.CTkLabel(
+                self.table,
+                text="No results found",
+                font=ctk.CTkFont(size=14),
+                text_color="gray"
+            )
+            no_data_label.pack(pady=40)
+            return
+
+        # Display items
+        for i, item in enumerate(page_items):
+            item_frame = ctk.CTkFrame(self.table)
+            item_frame.pack(fill="x", padx=10, pady=5)
+
+            # Item data
+            data_text = json.dumps(item.data, indent=2, ensure_ascii=False)
+            data_label = ctk.CTkLabel(
+                item_frame,
+                text=data_text,
+                font=ctk.CTkFont(size=10),
+                anchor="w",
+                justify="left"
+            )
+            data_label.pack(fill="x", padx=10, pady=5)
+
+    def _prev_page(self):
+        """Go to previous page"""
+        if self.current_page > 0:
+            self.current_page -= 1
+            self._update_pagination()
+            self._display_page()
+
+    def _next_page(self):
+        """Go to next page"""
+        total_pages = max(1, (len(self.filtered_items) + self.page_size - 1) // self.page_size)
+        if self.current_page < total_pages - 1:
+            self.current_page += 1
+            self._update_pagination()
+            self._display_page()

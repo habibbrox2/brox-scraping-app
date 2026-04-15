@@ -7,6 +7,7 @@ from typing import Optional
 from apscheduler.schedulers.background import BackgroundScheduler
 from apscheduler.triggers.cron import CronTrigger
 from apscheduler.triggers.interval import IntervalTrigger
+from apscheduler.jobstores.base import JobLookupError
 
 from app.database import db
 from app.scraper.scraper_engine import scraper_engine
@@ -47,7 +48,10 @@ class JobScheduler:
             return
         
         # Remove existing job if any
-        self.scheduler.remove_job(job_id)
+        try:
+            self.scheduler.remove_job(job_id)
+        except JobLookupError:
+            pass
         
         # Add new job
         self.scheduler.add_job(
@@ -61,9 +65,10 @@ class JobScheduler:
     
     def unschedule_job(self, job_id: str):
         """Remove a scheduled job"""
-        if self.scheduler.remove_job(job_id):
+        try:
+            self.scheduler.remove_job(job_id)
             logger.info(f"Unscheduled job {job_id}")
-        else:
+        except JobLookupError:
             logger.warning(f"Job {job_id} was not scheduled")
     
     def _run_scheduled_job(self, job_id: str):

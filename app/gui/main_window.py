@@ -72,6 +72,7 @@ class MainWindow(ctk.CTk):
             ("my_jobs", "📋", "My Jobs"),
             ("results", "📊", "Results"),
             ("templates", "📄", "Templates"),
+            ("sources", "🌐", "Sources"),
             ("ai_chat", "🤖", "AI Chat"),
             ("settings", "⚙️", "Settings"),
         ]
@@ -141,6 +142,8 @@ class MainWindow(ctk.CTk):
             self.show_results()
         elif view == "templates":
             self.show_templates()
+        elif view == "sources":
+            self.show_sources()
         elif view == "ai_chat":
             self.show_ai_chat()
         elif view == "settings":
@@ -175,7 +178,13 @@ class MainWindow(ctk.CTk):
         from app.gui.templates import TemplatesView
         self._clear_content()
         TemplatesView(self._content_frame).pack(fill="both", expand=True)
-    
+
+    def show_sources(self):
+        """Show sources view"""
+        from app.gui.sources import SourcesView
+        self._clear_content()
+        SourcesView(self._content_frame).pack(fill="both", expand=True)
+
     def show_ai_chat(self):
         """Show AI chat - opens as popup"""
         from app.gui.ai_chat import AIChatPopup
